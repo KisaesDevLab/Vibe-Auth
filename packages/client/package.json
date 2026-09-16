@@ -1,0 +1,90 @@
+{
+  "name": "@kisaes/vibe-auth",
+  "version": "0.1.0",
+  "description": "Vibe Auth client: shared Express OIDC middleware, adapters, break-glass CLI and React components for Vibe products",
+  "license": "UNLICENSED",
+  "type": "module",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kisaes/vibe-auth.git",
+    "directory": "packages/client"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js",
+      "require": "./dist/react/index.cjs"
+    },
+    "./tauri": {
+      "types": "./dist/tauri.d.ts",
+      "import": "./dist/tauri.js",
+      "require": "./dist/tauri.cjs"
+    },
+    "./sql/auth_identities.sql": "./sql/auth_identities.sql",
+    "./sql/drizzle": {
+      "types": "./dist/sql/drizzle.d.ts",
+      "import": "./dist/sql/drizzle.js",
+      "require": "./dist/sql/drizzle.cjs"
+    }
+  },
+  "bin": {
+    "vibe-auth": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "sql",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "express": ">=4.18",
+    "react": ">=18",
+    "drizzle-orm": ">=0.34"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "drizzle-orm": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "jose": "^5.9.6",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.17.0",
+    "@types/react": "^18.3.12",
+    "express": "^4.21.1",
+    "react": "^18.3.1",
+    "supertest": "^7.0.0",
+    "@types/supertest": "^6.0.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "drizzle-orm": "^0.36.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
