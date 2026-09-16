@@ -15,7 +15,8 @@ Phase 6: DONE — Vibe-Appliance branch `vibe-auth-integration` (commit ed117ab)
 Phase 7: READY TO RUN — bare-metal office LAN box, run by the human: test/scripts/phase7.sh + docs/phase7-checklist.md.
          Paste per-mode tables here.
 Phase 8: Trial Balance DONE — trial-balance-app branch `vibe-auth-integration` (317/317 server tests, e2e 41/41).
-         Sentinel (step 7: package + /api/ingest/vibe-auth + SENT-V-AUTH rules) — IN PROGRESS on branch vibe-auth-integration.
+         Sentinel DONE — Vibe-Sentinel branch `vibe-auth-integration` (commit 6834a61): package integration, POST /api/ingest/vibe-auth,
+         SENT-V-AUTH-000..004 rules, password-only vibe-breakglass; 229/229 tests, fake-IdP e2e 22/22.
          Remaining: T&B, MyBooks, AI Router, TRC, 1099, Entity, Investments, Calculators, 1040, Recap, Connect, Backup
          (docs/integration-checklist.md).
 Phase 9: docs done. v1.0.0 tagged locally on KisaesDevLab naming (D27); push + CI publish pending a remote.
