@@ -3,8 +3,8 @@
 One PR per product. Trial Balance is the reference implementation (`trial-balance-app`, see `docs/sso.md` there). Every step below has a concrete anchor in COMPAT.md §B.
 
 ## 1. Dependency and tables
-- [ ] Add `@kisaes/vibe-auth` (GitHub Packages, `.npmrc` scope `@kisaes`). CJS products (Trial Balance) use `require`; ESM products import.
-- [ ] Migration that runs `sql/auth_identities.sql` (or imports `@kisaes/vibe-auth/sql/drizzle` into the Drizzle schema). Tables: `auth_identities`, `auth_settings`, `auth_revocations`.
+- [ ] Add `@kisaesdevlab/vibe-auth` (GitHub Packages, `.npmrc` scope `@kisaes`). CJS products (Trial Balance) use `require`; ESM products import.
+- [ ] Migration that runs `sql/auth_identities.sql` (or imports `@kisaesdevlab/vibe-auth/sql/drizzle` into the Drizzle schema). Tables: `auth_identities`, `auth_settings`, `auth_revocations`.
 - [ ] If the user table lacks a disabled flag (Entity) add one; if it lacks a verified-email marker, JIT users are created with the IdP's `email_verified=true` and no column is needed.
 
 ## 2. Adapters (`src/lib/vibeAuth.ts` or equivalent)
@@ -29,7 +29,7 @@ One PR per product. Trial Balance is the reference implementation (`trial-balanc
 - [ ] Login page: wrap the local form in `<LoginPanel basePath returnTo>`; add the hidden break-glass route `/login/local` with `breakglass`.
 - [ ] Settings → Authentication: `<AuthSettingsPage basePath productName fetch>` (pass a fetch that adds bearer/CSRF headers where the product needs them). Nav entry in the admin section.
 - [ ] Sign-out: call `/auth/oidc/logout` (RP-initiated) when the session came from SSO.
-- [ ] Tauri products (T&B, Connect): `loopbackLogin({ serverUrl, basePath })` from `@kisaes/vibe-auth/tauri`; `SessionAdapter.issueToken` returns a bearer for the desktop app.
+- [ ] Tauri products (T&B, Connect): `loopbackLogin({ serverUrl, basePath })` from `@kisaesdevlab/vibe-auth/tauri`; `SessionAdapter.issueToken` returns a bearer for the desktop app.
 
 ## 5. CLI + manifest
 - [ ] `vibeAuth.adapter` in `package.json` → module exporting `{ users, audit, adminRole, breakglassEmail, close }`. Verify `npx vibe-auth breakglass status` in the image (distroless images: point `sso.breakglassCommand` at `node <path>/dist/cli.js`).

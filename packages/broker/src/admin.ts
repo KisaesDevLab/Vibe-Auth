@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Request, Response, Router } from "express";
 import express from "express";
-import { createVibeAuth, createPgStores, vibeAuthExpress, type SessionAdapter, type SessionIdentity, type UserAdapter, type VibeUser } from "@kisaes/vibe-auth";
+import { createVibeAuth, createPgStores, vibeAuthExpress, type SessionAdapter, type SessionIdentity, type UserAdapter, type VibeUser } from "@kisaesdevlab/vibe-auth";
 import type { Authentik } from "./authentik.js";
 import { AuthentikError } from "./authentik.js";
 import type { BootstrapResult } from "./bootstrap.js";

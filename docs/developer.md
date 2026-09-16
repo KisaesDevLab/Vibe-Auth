@@ -2,8 +2,8 @@
 
 ## Layout
 ```
-packages/client   @kisaes/vibe-auth — Express/Fastify OIDC engine, adapters, React, Tauri helper, CLI
-packages/broker   ghcr.io/kisaes/vibe-auth — authentik bootstrap, registration API, setup wizard, admin console
+packages/client   @kisaesdevlab/vibe-auth — Express/Fastify OIDC engine, adapters, React, Tauri helper, CLI
+packages/broker   ghcr.io/kisaesdevlab/vibe-auth — authentik bootstrap, registration API, setup wizard, admin console
 deploy/           compose profile, blueprints, backup contract, D9 "port" Caddyfile
 test/             compose.yml integration stack + ref-app (Express reference product) + scripts
 docs/             this file, firm guides, entra setup, integration checklist
@@ -14,7 +14,7 @@ docs/             this file, firm guides, entra setup, integration checklist
 pnpm install
 pnpm -r run typecheck
 pnpm -r run build
-pnpm --filter @kisaes/vibe-auth test          # 36 tests, in-process fake OpenID provider
+pnpm --filter @kisaesdevlab/vibe-auth test          # 36 tests, in-process fake OpenID provider
 cd test && cp .env.example .env && docker compose --env-file .env up -d --build
 node test/scripts/integration.mjs             # real authentik + broker + ref-app matrix
 ```
@@ -44,4 +44,4 @@ Routing modes (`VIBE_AUTH_ROUTING`): `subpath` (default), `subdomain`, `port`; a
 `10-vibe-groups.yaml` (five groups), `20-vibe-flows.yaml` (recovery flow; MFA-required authentication flow with TOTP/WebAuthn/static enrolment; brand flow bindings). The MFA validation stage is `state: created` so the broker's enforcement toggle (`not_configured_action`) is not reverted by the hourly reconcile.
 
 ## Release
-Tag `vX.Y.Z` → CI publishes `@kisaes/vibe-auth` to GitHub Packages and pushes `ghcr.io/<owner>/vibe-auth:X.Y.Z` (amd64). Bump the authentik digest in `deploy/compose.yml`, `test/compose.yml`, `Vibe-Appliance/apps/vibe-auth.yml` together.
+Tag `vX.Y.Z` → CI publishes `@kisaesdevlab/vibe-auth` to GitHub Packages and pushes `ghcr.io/<owner>/vibe-auth:X.Y.Z` (amd64). Bump the authentik digest in `deploy/compose.yml`, `test/compose.yml`, `Vibe-Appliance/apps/vibe-auth.yml` together.

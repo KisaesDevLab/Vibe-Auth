@@ -11,4 +11,4 @@ pnpm install && pnpm -r run build && pnpm -r run test
 cd test && cp .env.example .env && docker compose --env-file .env up -d --build && node scripts/integration.mjs
 ```
 
-Artifacts: `@kisaes/vibe-auth` (GitHub Packages), `ghcr.io/kisaes/vibe-auth` (broker image, amd64), `deploy/` (compose profile + blueprints).
+Artifacts: `@kisaesdevlab/vibe-auth` (GitHub Packages), `ghcr.io/kisaesdevlab/vibe-auth` (broker image, amd64), `deploy/` (compose profile + blueprints).

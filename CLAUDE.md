@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 pnpm install                                   # workspace: packages/client, packages/broker, test/ref-app
 pnpm -r run typecheck                          # tsc across all packages (broker/ref-app also check their Vite UIs)
 pnpm -r run build                              # client (tsup esm+cjs+dts), broker (tsc + vite ui), ref-app
-pnpm --filter @kisaes/vibe-auth test           # vitest: 36 unit + flow tests against an in-process fake OpenID provider
-pnpm --filter @kisaes/vibe-auth exec vitest run test/flow.test.ts -t "back-channel"   # one test
+pnpm --filter @kisaesdevlab/vibe-auth test           # vitest: 36 unit + flow tests against an in-process fake OpenID provider
+pnpm --filter @kisaesdevlab/vibe-auth exec vitest run test/flow.test.ts -t "back-channel"   # one test
 cd test && cp .env.example .env && docker compose -f compose.yml --env-file .env up -d --build
 node test/scripts/integration.mjs              # real authentik 2026.8 + broker + ref-app matrix (http://localhost:18080)
 docker compose -f test/compose.yml --env-file test/.env down -v
@@ -25,7 +25,7 @@ Key amendments already made: authentik ≥2025 needs no Redis (no cache service)
 
 ## Architecture
 
-**`packages/client` (`@kisaes/vibe-auth`)** — `engine.ts` is the framework-neutral core (`HttpRequest → HttpResponse | null`); `express.ts` and `fastify.ts` are thin adapters. Products supply `UserAdapter` + `SessionAdapter` (`adapters/types.ts`); `createPgStores({ query })` gives identity/settings/revocation stores over any SQL runner. `discovery.ts` fetches through `VIBE_OIDC_INTERNAL_BASE`, validates the public issuer, rewrites server-to-server endpoints and sends `X-Forwarded-Host/Proto` so authentik computes the public issuer. `identity.ts` (link by (issuer,sub) → verified email → JIT), `roles.ts` (D22), `tokens.ts` (ID/logout token validation), `breakglass.ts` + `cli.ts` (D12), `react/` (LoginPanel, AuthSettingsPage), `tauri.ts` (loopback login). Tests: `test/fake-idp.ts` is a full fake OP; `test/harness.ts` shows a complete integration.
+**`packages/client` (`@kisaesdevlab/vibe-auth`)** — `engine.ts` is the framework-neutral core (`HttpRequest → HttpResponse | null`); `express.ts` and `fastify.ts` are thin adapters. Products supply `UserAdapter` + `SessionAdapter` (`adapters/types.ts`); `createPgStores({ query })` gives identity/settings/revocation stores over any SQL runner. `discovery.ts` fetches through `VIBE_OIDC_INTERNAL_BASE`, validates the public issuer, rewrites server-to-server endpoints and sends `X-Forwarded-Host/Proto` so authentik computes the public issuer. `identity.ts` (link by (issuer,sub) → verified email → JIT), `roles.ts` (D22), `tokens.ts` (ID/logout token validation), `breakglass.ts` + `cli.ts` (D12), `react/` (LoginPanel, AuthSettingsPage), `tauri.ts` (loopback login). Tests: `test/fake-idp.ts` is a full fake OP; `test/harness.ts` shows a complete integration.
 
 **`packages/broker`** — Express service: `bootstrap.ts` (idempotent authentik repair on top of `deploy/blueprints`), `registrations.ts` (one OAuth2 provider + application per product; env block; rotate/rebase/verify; optional forward-auth edge gate), `setup.ts` (one-time-token wizard, D13), `admin.ts` (dogfoods the client package: admins log in via authentik app `vibe-auth-admin`), `audit.ts` (Postgres + JSONL + Sentinel webhook + authentik event forwarding), `config.ts` (routing modes; Appliance hints). Broker tables are prefixed `vibe_broker_` because they share the `vibe_auth` database with authentik.
 

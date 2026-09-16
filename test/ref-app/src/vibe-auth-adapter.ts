@@ -1,5 +1,5 @@
 /** CLI adapter for `npx vibe-auth breakglass …` (package.json → vibeAuth.adapter). */
-import type { VibeAuthCliAdapter } from "@kisaes/vibe-auth";
+import type { VibeAuthCliAdapter } from "@kisaesdevlab/vibe-auth";
 import { audit, users, ROLES } from "./adapters.js";
 import { migrate, pool } from "./db.js";
 

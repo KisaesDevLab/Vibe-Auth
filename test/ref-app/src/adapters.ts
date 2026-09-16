@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual, createCipheriv, createDecipheriv, createHash } from "node:crypto";
 import type { Request, Response } from "express";
-import type { AuditSink, SecretWrap, SessionAdapter, SessionIdentity, UserAdapter, VibeUser } from "@kisaes/vibe-auth";
+import type { AuditSink, SecretWrap, SessionAdapter, SessionIdentity, UserAdapter, VibeUser } from "@kisaesdevlab/vibe-auth";
 import { query } from "./db.js";
 
 export const ROLES = { roles: ["admin", "reviewer", "preparer"] as const, adminRole: "admin" };

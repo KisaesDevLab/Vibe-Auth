@@ -1,4 +1,4 @@
-// @kisaes/vibe-auth — server entry
+// @kisaesdevlab/vibe-auth — server entry
 export { createVibeAuth, VibeAuth, type VibeAuthOptions, type AuthStatus, type Logger } from "./engine.js";
 export { vibeAuthExpress, guardLocalLogin, toHttpRequest, sendHttpResponse } from "./express.js";
 export { vibeAuthFastify, type VibeAuthFastifyOptions } from "./fastify.js";

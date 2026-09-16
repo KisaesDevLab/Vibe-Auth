@@ -63,9 +63,9 @@ jobs:
       - uses: pnpm/action-setup@v4
         with: { version: ${{ env.PNPM_VERSION }} }
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: pnpm, registry-url: https://npm.pkg.github.com, scope: "@kisaes" }
+        with: { node-version: 20, cache: pnpm, registry-url: https://npm.pkg.github.com, scope: "@kisaesdevlab" }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @kisaes/vibe-auth run build
+      - run: pnpm --filter @kisaesdevlab/vibe-auth run build
       - name: Set version from tag
         run: cd packages/client && npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
       - run: cd packages/client && pnpm publish --no-git-checks

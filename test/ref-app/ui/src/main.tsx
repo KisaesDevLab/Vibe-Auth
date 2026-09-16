@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { AuthSettingsPage, LoginPanel, useAuthStatus } from "@kisaes/vibe-auth/react";
+import { AuthSettingsPage, LoginPanel, useAuthStatus } from "@kisaesdevlab/vibe-auth/react";
 
 const BASE = (import.meta.env.BASE_URL ?? "/").replace(/\/+$/, "");
 const api = (p: string, init?: RequestInit) => fetch(`${BASE}/api${p}`, { credentials: "same-origin", headers: { "content-type": "application/json" }, ...init });

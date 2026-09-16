@@ -1,17 +1,19 @@
 {
   "name": "vibe-auth-monorepo",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Vibe Auth: SSO/OIDC identity component for the Vibe product family",
   "license": "UNLICENSED",
   "packageManager": "pnpm@9.15.9",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "pnpm -r --filter ./packages/* run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "lint": "pnpm -r run lint",
-    "dev:broker": "pnpm --filter @kisaes/vibe-auth-broker dev",
+    "dev:broker": "pnpm --filter @kisaesdevlab/vibe-auth-broker dev",
     "dev:ref-app": "pnpm --filter vibe-auth-ref-app dev"
   },
   "devDependencies": {

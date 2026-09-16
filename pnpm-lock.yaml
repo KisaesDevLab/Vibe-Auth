@@ -14,7 +14,7 @@ importers:
 
   packages/broker:
     dependencies:
-      '@kisaes/vibe-auth':
+      '@kisaesdevlab/vibe-auth':
         specifier: workspace:*
         version: link:../client
       express:
@@ -109,7 +109,7 @@ importers:
 
   test/ref-app:
     dependencies:
-      '@kisaes/vibe-auth':
+      '@kisaesdevlab/vibe-auth':
         specifier: workspace:*
         version: link:../../packages/client
       express:

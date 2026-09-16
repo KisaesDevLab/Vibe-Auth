@@ -1,7 +1,7 @@
 # Vibe Auth — Build Plan (v2, Q&A-locked)
 
-Repo: `kisaes/vibe-auth`
-Artifacts: `@kisaes/vibe-auth` (npm, GitHub Packages) · `ghcr.io/kisaes/vibe-auth` (broker image, amd64) · `deploy/` (compose profile + blueprints + Caddy snippet)
+Repo: `KisaesDevLab/Vibe-Auth`
+Artifacts: `@kisaesdevlab/vibe-auth` (npm, GitHub Packages) · `ghcr.io/kisaesdevlab/vibe-auth` (broker image, amd64) · `deploy/` (compose profile + blueprints + backup contract)
 Runs: inside Vibe Appliance as a `provides: identity` core component, or standalone beside any single Vibe product.
 Execution: autonomous Claude Code, phased. Human checkpoints are listed in §9 and nowhere else; every other step is expected to run unattended.
 
@@ -20,12 +20,12 @@ The design is fixed by the Q&A in §1. Three facts still live in code and are di
 | D1 | OIDC Authorization Code + PKCE only. No SAML, no implicit. | design |
 | D2 | Bundled IdP is Authentik, upstream image pinned by digest, never forked. | design |
 | D3 | Broker (`vibe-auth`, Node/Express) bootstraps Authentik, exposes registration API, hosts firm admin UI, emits audit events. | design |
-| D4 | Client package `@kisaes/vibe-auth`: shared Express middleware + React components. | design |
+| D4 | Client package `@kisaesdevlab/vibe-auth`: shared Express middleware + React components. | design |
 | D5 | Firm staff only. Client-portal users never use firm SSO. | design |
 | D6 | Every product keeps local auth. Modes `local` (default) · `both` · `oidc_only`. | design |
 | D7 | Postgres: one shared Appliance instance; Vibe Auth gets database `vibe_auth`, role `vibe_auth`. Bundled-Postgres mode exists only for standalone installs. | Q&A |
 | D8 | Platform: amd64 only. | Q&A |
-| D9 | LAN mode is reached by IP address. Therefore no `auth.` subdomain in LAN mode; Authentik is served on a dedicated Caddy port (`https://{ip}:8443`) because Authentik does not support subpath deployment. Domain and Tailscale modes use `auth.{host}`. An IP/host change triggers `/rebase`. | Q&A |
+| D9 | **Revised 2026-09-16 (Q&A after Phase 0):** Authentik supports subpath deployment (`AUTHENTIK_WEB__PATH`), so the identity provider is served at `https://{host}/auth/` in LAN, Tailscale and single-host domain modes and at `https://auth.{host}/auth/` in subdomain-per-app mode — the same routing every product uses, no published port. The original `:8443` design remains available as `VIBE_AUTH_ROUTING=port` (`deploy/compose.yml --profile port`). An IP/host change triggers `/rebase`. | Q&A |
 | D10 | Caddy edge gate (`forward_auth`) is off by default, opt-in per install. | Q&A |
 | D11 | Enabling Vibe Auth changes nothing in products. Each product stays `local` until the firm flips it individually in the console (to `both`) or in the product's own settings. | Q&A |
 | D12 | Break-glass: the console creates a dedicated `vibe-breakglass` local admin in every SSO-capable product via a package-provided command. Password generated once, shown once, stored in the Appliance secret store. | Q&A |
@@ -41,6 +41,12 @@ The design is fixed by the Q&A in §1. Three facts still live in code and are di
 | D22 | Roles: `roles` claim (Entra App Roles) preferred; else groups→role map. Default Authentik groups `vibe-admin`, `vibe-partner`, `vibe-manager`, `vibe-staff`, `vibe-it`. | design |
 | D23 | MFA enforced in bundled Authentik by default (TOTP/WebAuthn); can be disabled only with a logged acknowledgement. | design |
 | D24 | Client secrets encrypted at rest in products using each product's existing key-wrap (adapter). | design |
+| D25 | Vibe Auth is the **only** identity provider in the catalog. Sentinel consumes it (its `OIDC_ISSUER` points at Vibe Auth via the client package); Sentinel Core drops its bundled Authentik. Sentinel gains `POST /api/ingest/vibe-auth` + `SENT-V-AUTH-*` rules in Phase 8 step 7. | Q&A 2026-09-16 |
+| D26 | Entra ID federation is **not part of v1**: H1 (tenants) is deferred; the Entra source wizard ships but is untested. Bundled Authentik and Google only for v1. | Q&A 2026-09-16 |
+| D27 | Artifacts publish under **KisaesDevLab**: `@kisaesdevlab/vibe-auth` (GitHub Packages), `ghcr.io/kisaesdevlab/vibe-auth`, repo `KisaesDevLab/Vibe-Auth`. | Q&A 2026-09-16 |
+| D28 | `oidc_only` guard is split: the console requires a stored break-glass password; the product's Settings → Authentication page additionally requires a successful Test connection within 60 minutes by the same admin. | Q&A 2026-09-16 |
+| D29 | LAN-mode internal CA is not distributed in v1 (per-device click-through, as for products). MyBooks `user_type='client'` rows are denied SSO (D5). Default role maps as in `docs/integration-checklist.md`. Tauri desktop login uses `@fabianlars/tauri-plugin-oauth`. | Q&A 2026-09-16 |
+| D30 | Phase 7 runs on a bare-metal box on the office LAN, executed by the human with `test/scripts/phase7.sh`; results pasted back. Follow-up scope accepted: restore ordering in Vibe Backup (separate PR). | Q&A 2026-09-16 |
 
 ---
 
@@ -77,7 +83,7 @@ Per SSO-capable product:
            "publicPaths": ["/webhooks/*", "/api/health"],
            "edgeGate": false,
            "breakglassService": "vibe-tb-server",
-           "breakglassCommand": ["node", "node_modules/@kisaes/vibe-auth/dist/cli.js", "breakglass", "ensure", "--json"] } }
+           "breakglassCommand": ["node", "node_modules/@kisaesdevlab/vibe-auth/dist/cli.js", "breakglass", "ensure", "--json"] } }
 ```
 `requires` affects boot order only (bootstrap.sh's topological sort); a product installs fine without Vibe Auth present.
 

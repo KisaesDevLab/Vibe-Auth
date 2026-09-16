@@ -1,8 +1,8 @@
 {
   "name": "vibe-auth-ref-app",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "Minimal Express product using @kisaes/vibe-auth — the Phase 2–7 reference integration",
+  "description": "Minimal Express product using @kisaesdevlab/vibe-auth — the Phase 2–7 reference integration",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build ui --outDir ../dist/ui --emptyOutDir",
@@ -11,9 +11,11 @@
     "test": "vitest run",
     "start": "node dist/server.js"
   },
-  "vibeAuth": { "adapter": "./dist/vibe-auth-adapter.js" },
+  "vibeAuth": {
+    "adapter": "./dist/vibe-auth-adapter.js"
+  },
   "dependencies": {
-    "@kisaes/vibe-auth": "workspace:*",
+    "@kisaesdevlab/vibe-auth": "workspace:*",
     "express": "^4.21.1",
     "pg": "^8.13.1"
   },

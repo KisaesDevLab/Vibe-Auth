@@ -2,7 +2,7 @@
  * Drizzle schema fragment for the Vibe Auth client tables. Import into the
  * product's schema file so drizzle-kit generates the migration:
  *
- *   export { authIdentities, authSettings, authRevocations } from "@kisaes/vibe-auth/sql/drizzle";
+ *   export { authIdentities, authSettings, authRevocations } from "@kisaesdevlab/vibe-auth/sql/drizzle";
  *
  * drizzle-orm is an optional peer; this module is only loaded by products that use it.
  */

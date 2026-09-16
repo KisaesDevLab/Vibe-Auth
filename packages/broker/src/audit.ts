@@ -1,6 +1,6 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AuditEvent, AuditSink } from "@kisaes/vibe-auth";
+import type { AuditEvent, AuditSink } from "@kisaesdevlab/vibe-auth";
 import type { Authentik } from "./authentik.js";
 import type { BrokerConfig } from "./config.js";
 import type { Db } from "./db.js";

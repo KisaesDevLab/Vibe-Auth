@@ -1,6 +1,6 @@
 # Client package test matrix (Phase 3 exit)
 
-Run: `pnpm --filter @kisaes/vibe-auth test` (unit + flow against the in-process fake OpenID provider, `test/fake-idp.ts`). Real-IdP coverage: `node test/scripts/integration.mjs` against `test/compose.yml`.
+Run: `pnpm --filter @kisaesdevlab/vibe-auth test` (unit + flow against the in-process fake OpenID provider, `test/fake-idp.ts`). Real-IdP coverage: `node test/scripts/integration.mjs` against `test/compose.yml`.
 
 | Plan item | Test | Status |
 |---|---|---|

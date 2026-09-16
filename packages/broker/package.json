@@ -1,6 +1,6 @@
 {
-  "name": "@kisaes/vibe-auth-broker",
-  "version": "0.1.0",
+  "name": "@kisaesdevlab/vibe-auth-broker",
+  "version": "1.0.0",
   "private": true,
   "description": "Vibe Auth broker: bootstraps Authentik, registration API, setup wizard, firm admin UI, audit export",
   "license": "UNLICENSED",
@@ -16,7 +16,7 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@kisaes/vibe-auth": "workspace:*",
+    "@kisaesdevlab/vibe-auth": "workspace:*",
     "express": "^4.21.1",
     "pg": "^8.13.1",
     "zod": "^3.23.8"
@@ -35,5 +35,7 @@
     "vite": "^5.4.11",
     "vitest": "^2.1.8"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

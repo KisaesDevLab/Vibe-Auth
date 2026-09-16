@@ -1,4 +1,4 @@
-# Vibe Auth broker — ghcr.io/kisaes/vibe-auth (amd64, D8). Build context: repository root.
+# Vibe Auth broker — ghcr.io/kisaesdevlab/vibe-auth (amd64, D8). Build context: repository root.
 FROM node:20-alpine AS build
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 WORKDIR /repo
@@ -9,12 +9,12 @@ COPY test/ref-app/package.json test/ref-app/
 RUN pnpm install --frozen-lockfile
 COPY packages/client packages/client
 COPY packages/broker packages/broker
-RUN pnpm --filter @kisaes/vibe-auth run build && pnpm --filter @kisaes/vibe-auth-broker run build
-RUN pnpm --filter @kisaes/vibe-auth-broker --prod deploy /out
+RUN pnpm --filter @kisaesdevlab/vibe-auth run build && pnpm --filter @kisaesdevlab/vibe-auth-broker run build
+RUN pnpm --filter @kisaesdevlab/vibe-auth-broker --prod deploy /out
 
 FROM node:20-alpine
 LABEL org.opencontainers.image.title="Vibe Auth broker" \
-      org.opencontainers.image.source="https://github.com/kisaes/vibe-auth" \
+      org.opencontainers.image.source="https://github.com/KisaesDevLab/Vibe-Auth" \
       com.kisaes.vibe.product="vibe-auth"
 WORKDIR /app
 COPY --from=build /out /app

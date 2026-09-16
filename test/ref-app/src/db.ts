@@ -34,6 +34,6 @@ export async function migrate(): Promise<void> {
   )`);
   await query(`CREATE TABLE IF NOT EXISTS audit_log (id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), type TEXT NOT NULL, payload JSONB NOT NULL)`);
   // The package's SQL fragment (auth_identities, auth_settings, auth_revocations).
-  const sqlPath = require.resolve("@kisaes/vibe-auth/sql/auth_identities.sql");
+  const sqlPath = require.resolve("@kisaesdevlab/vibe-auth/sql/auth_identities.sql");
   await query(readFileSync(sqlPath, "utf8"));
 }

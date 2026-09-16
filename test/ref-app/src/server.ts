@@ -1,12 +1,12 @@
 /**
- * Reference product (Phase 1 exit): a minimal Express app using @kisaes/vibe-auth.
+ * Reference product (Phase 1 exit): a minimal Express app using @kisaesdevlab/vibe-auth.
  * Mirrors how a Vibe product integrates: local login kept, SSO added, settings page, break-glass CLI.
  */
 import express from "express";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPgStores, createVibeAuth, guardLocalLogin, vibeAuthExpress } from "@kisaes/vibe-auth";
+import { createPgStores, createVibeAuth, guardLocalLogin, vibeAuthExpress } from "@kisaesdevlab/vibe-auth";
 import { audit, ROLES, secretWrap, sessions, users, verifyLocalLogin } from "./adapters.js";
 import { migrate, query } from "./db.js";
 

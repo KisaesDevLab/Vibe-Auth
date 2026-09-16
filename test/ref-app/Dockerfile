@@ -11,7 +11,7 @@ COPY packages/client packages/client
 COPY test/ref-app test/ref-app
 ARG VITE_BASE_PATH=/
 ENV VITE_BASE_PATH=$VITE_BASE_PATH
-RUN pnpm --filter @kisaes/vibe-auth run build && pnpm --filter vibe-auth-ref-app run build
+RUN pnpm --filter @kisaesdevlab/vibe-auth run build && pnpm --filter vibe-auth-ref-app run build
 RUN pnpm --filter vibe-auth-ref-app --prod deploy /out
 
 FROM node:20-alpine

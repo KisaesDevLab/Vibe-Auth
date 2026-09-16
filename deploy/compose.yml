@@ -76,7 +76,7 @@ services:
         reservations: { memory: 384m }
 
   vibe-auth:
-    image: ${VIBE_AUTH_IMAGE:-ghcr.io/kisaes/vibe-auth:latest}
+    image: ${VIBE_AUTH_IMAGE:-ghcr.io/kisaesdevlab/vibe-auth:latest}
     container_name: vibe-auth
     restart: unless-stopped
     environment:
@@ -116,7 +116,7 @@ services:
 
   # One-shot: creates database/role in the shared Postgres when VIBE_AUTH_PG_ADMIN_URL is set (D7).
   vibe-auth-db-init:
-    image: ${VIBE_AUTH_IMAGE:-ghcr.io/kisaes/vibe-auth:latest}
+    image: ${VIBE_AUTH_IMAGE:-ghcr.io/kisaesdevlab/vibe-auth:latest}
     container_name: vibe-auth-db-init
     restart: "no"
     environment:
