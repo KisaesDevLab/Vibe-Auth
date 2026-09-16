@@ -45,7 +45,7 @@ jobs:
           cp test/.env.example test/.env
           docker compose -f test/compose.yml up -d --build
       - name: Wait for broker health
-        run: test/scripts/wait-for.sh http://localhost:8080/vibe-auth/health 300
+        run: test/scripts/wait-for.sh http://localhost:18080/vibe-auth/health 300
       - name: Run the integration matrix
         run: node test/scripts/integration.mjs
       - name: Logs on failure

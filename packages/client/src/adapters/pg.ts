@@ -80,20 +80,20 @@ export function createPgSettingsStore(o: PgStoresOptions, key = "vibe_auth"): Se
 export function createPgRevocationList(o: PgStoresOptions): RevocationList {
   const t = ident(o.tables?.revocations ?? "auth_revocations");
   return {
-    async revoke(key, until) {
+    async revoke(key, revokedAt, until) {
       for (const k of keysOf(key)) {
         await o.query(
-          `INSERT INTO ${t} (subject_key, revoked_until) VALUES ($1, $2)
-           ON CONFLICT (subject_key) DO UPDATE SET revoked_until = GREATEST(${t}.revoked_until, EXCLUDED.revoked_until)`,
-          [k, until],
+          `INSERT INTO ${t} (subject_key, revoked_at, revoked_until) VALUES ($1, $2, $3)
+           ON CONFLICT (subject_key) DO UPDATE SET revoked_at = GREATEST(${t}.revoked_at, EXCLUDED.revoked_at), revoked_until = GREATEST(${t}.revoked_until, EXCLUDED.revoked_until)`,
+          [k, revokedAt, until],
         );
       }
     },
     async isRevoked(key, issuedAtMs) {
       const keys = keysOf(key);
       if (!keys.length) return false;
-      const rows = await o.query(`SELECT revoked_until FROM ${t} WHERE subject_key = ANY($1::text[]) AND revoked_until > now()`, [keys]);
-      return rows.some((r) => new Date(r.revoked_until as string).getTime() >= issuedAtMs);
+      const rows = await o.query(`SELECT revoked_at FROM ${t} WHERE subject_key = ANY($1::text[]) AND revoked_until > now()`, [keys]);
+      return rows.some((r) => new Date(r.revoked_at as string).getTime() >= issuedAtMs);
     },
   };
 }

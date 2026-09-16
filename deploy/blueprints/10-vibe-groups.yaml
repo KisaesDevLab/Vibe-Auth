@@ -1,0 +1,27 @@
+# Vibe Auth: default groups (D22). Applied atomically by authentik at start and reconciled hourly.
+version: 1
+metadata:
+  name: vibe-auth-groups
+  labels:
+    blueprints.goauthentik.io/description: "Vibe Auth default role groups"
+entries:
+  - model: authentik_core.group
+    state: present
+    identifiers: { name: vibe-admin }
+    attrs: { is_superuser: false, attributes: { "vibe.managed": true, "vibe.description": "Firm administrators: every product admin, Vibe Auth console" } }
+  - model: authentik_core.group
+    state: present
+    identifiers: { name: vibe-partner }
+    attrs: { is_superuser: false, attributes: { "vibe.managed": true, "vibe.description": "Partners / owners" } }
+  - model: authentik_core.group
+    state: present
+    identifiers: { name: vibe-manager }
+    attrs: { is_superuser: false, attributes: { "vibe.managed": true, "vibe.description": "Managers / reviewers" } }
+  - model: authentik_core.group
+    state: present
+    identifiers: { name: vibe-staff }
+    attrs: { is_superuser: false, attributes: { "vibe.managed": true, "vibe.description": "Staff / preparers" } }
+  - model: authentik_core.group
+    state: present
+    identifiers: { name: vibe-it }
+    attrs: { is_superuser: false, attributes: { "vibe.managed": true, "vibe.description": "IT administrators (Vibe Auth console only)" } }

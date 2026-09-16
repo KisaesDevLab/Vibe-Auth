@@ -36,6 +36,7 @@ export const authRevocations = pgTable(
   "auth_revocations",
   {
     subjectKey: text("subject_key").primaryKey(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }).notNull().defaultNow(),
     revokedUntil: timestamp("revoked_until", { withTimezone: true }).notNull(),
   },
   (t) => ({ untilIdx: index("auth_revocations_until_idx").on(t.revokedUntil) }),

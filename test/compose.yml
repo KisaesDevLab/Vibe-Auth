@@ -1,0 +1,110 @@
+# Phase 1/5 integration stack: Postgres + authentik (pinned) + broker + ref-app behind a plain-HTTP Caddy on :8080.
+# Subpath routing (Q7): http://localhost:8080/auth/ → authentik, /vibe-auth/ → broker, / → ref-app.
+name: vibe-auth-test
+
+x-authentik: &authentik
+  image: ghcr.io/goauthentik/server:2026.8.2@sha256:ff8489a5af4f4fe415ffd180a8e3c10b120bc2592d13d79dac050d977f7b9ecd
+  environment:
+    AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+    AUTHENTIK_POSTGRESQL__HOST: postgres
+    AUTHENTIK_POSTGRESQL__NAME: vibe_auth
+    AUTHENTIK_POSTGRESQL__USER: vibe_auth
+    AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASSWORD}
+    AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_TOKEN}
+    AUTHENTIK_BOOTSTRAP_EMAIL: akadmin@localhost
+    AUTHENTIK_WEB__PATH: /auth/
+    AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+    AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
+    AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    AUTHENTIK_LOG_LEVEL: info
+  volumes:
+    - ../deploy/blueprints:/blueprints/vibe:ro
+    - authentik-media:/media
+    - authentik-templates:/templates
+  depends_on:
+    postgres: { condition: service_healthy }
+  networks: [vibe_net]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vibe_auth
+      POSTGRES_USER: vibe_auth
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - ./scripts/init-ref-db.sql:/docker-entrypoint-initdb.d/10-ref.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibe_auth -d vibe_auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [vibe_net]
+
+  vibe-auth-authentik-server:
+    <<: *authentik
+    command: server
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 15s
+      timeout: 30s
+      start_period: 120s
+      retries: 10
+
+  vibe-auth-authentik-worker:
+    <<: *authentik
+    command: worker
+
+  vibe-auth:
+    build: { context: .., dockerfile: packages/broker/Dockerfile }
+    environment:
+      VIBE_AUTH_ROUTING: subpath
+      VIBE_AUTH_HOST: localhost:18080
+      VIBE_AUTH_SCHEME: http
+      VIBE_AUTH_AUTHENTIK_PATH: /auth/
+      VIBE_AUTH_AUTHENTIK_INTERNAL: http://vibe-auth-authentik-server:9000
+      VIBE_AUTH_AUTHENTIK_TOKEN: ${AUTHENTIK_TOKEN}
+      VIBE_AUTH_CONSOLE_TOKEN: ${CONSOLE_TOKEN}
+      VIBE_AUTH_SECRET_KEY: ${SECRET_KEY}
+      VIBE_AUTH_DATABASE_URL: postgresql://vibe_auth:${PG_PASSWORD}@postgres:5432/vibe_auth
+      VIBE_AUTH_SETUP_TOKEN: ${SETUP_TOKEN}
+      VIBE_AUTH_BRAND_NAME: Vibe Auth Test
+      VIBE_AUTH_EVENT_POLL_SECONDS: "5"
+      VIBE_AUTH_LOG_LEVEL: debug
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [vibe_net]
+
+  ref-app:
+    build:
+      context: ..
+      dockerfile: test/ref-app/Dockerfile
+      args: { VITE_BASE_PATH: /ref/ }
+    environment:
+      PORT: "3005"
+      VITE_BASE_PATH: /ref/
+      DATABASE_URL: postgresql://ref:ref@postgres:5432/ref
+      ENCRYPTION_KEY: ref-test-key
+      SESSION_SECURE: "false"
+      # VIBE_OIDC_* / VIBE_AUTH_MODE are injected by the integration script via ref-app.env
+    env_file:
+      - path: ./ref-app.env
+        required: false
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [vibe_net]
+
+  caddy:
+    image: caddy:2-alpine
+    ports: ["18080:8080"]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    networks: [vibe_net]
+
+volumes:
+  authentik-media:
+  authentik-templates:
+
+networks:
+  vibe_net:
+    name: vibe_auth_test_net

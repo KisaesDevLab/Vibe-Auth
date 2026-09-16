@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vibe Auth</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --bg: #f6f7f9; --fg: #1b1f24; --card: #fff; --muted: #5b6270; --line: rgba(127,127,127,.28); --accent: #2563eb; --danger: #dc2626; --ok: #16a34a; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #0f1115; --fg: #e6e8eb; --card: #181b21; --muted: #9aa3b2; } }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--fg); }
+      header { display: flex; align-items: center; gap: 1rem; padding: .75rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; }
+      header h1 { font-size: 1.05rem; margin: 0; }
+      nav { display: flex; gap: .25rem; flex-wrap: wrap; }
+      nav a { padding: .35rem .7rem; border-radius: 6px; color: inherit; text-decoration: none; font-size: .9rem; }
+      nav a.active { background: var(--accent); color: #fff; }
+      main { max-width: 1080px; margin: 0 auto; padding: 1.25rem; display: grid; gap: 1rem; }
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; }
+      .card h2 { margin: 0 0 .5rem; font-size: 1rem; }
+      table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+      th, td { text-align: left; padding: .45rem .4rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--muted); font-weight: 600; }
+      input, select, button { font: inherit; padding: .45rem .6rem; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: inherit; }
+      button { cursor: pointer; }
+      button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+      button.danger { background: var(--danger); color: #fff; border-color: transparent; }
+      .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+      .muted { color: var(--muted); font-size: .85rem; }
+      .pill { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; background: rgba(127,127,127,.18); }
+      .pill.ok { background: rgba(22,163,74,.18); color: var(--ok); }
+      .pill.bad { background: rgba(220,38,38,.18); color: var(--danger); }
+      code { font-size: .85em; }
+      label { display: grid; gap: .25rem; font-size: .9rem; }
+      .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .75rem; }
+      pre { white-space: pre-wrap; word-break: break-all; font-size: .8rem; max-height: 24rem; overflow: auto; }
+      @media (max-width: 640px) { main { padding: 1rem; } th:nth-child(n+4), td:nth-child(n+4) { display: none; } }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

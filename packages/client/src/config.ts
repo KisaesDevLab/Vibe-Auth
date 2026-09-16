@@ -34,7 +34,7 @@ export const envSchema = z.object({
   VIBE_OIDC_INTERNAL_BASE: baseUrl.optional(),
   VIBE_OIDC_CLIENT_ID: z.string().trim().min(1).optional(),
   VIBE_OIDC_CLIENT_SECRET: z.string().trim().min(1).optional(),
-  /** Public base URL of this product, used to build redirect/logout URIs. */
+  /** Public base URL of this product INCLUDING its path prefix (e.g. https://firm.example/tb); redirect/logout URIs are built from it. */
   VIBE_OIDC_PUBLIC_URL: baseUrl.optional(),
   VIBE_OIDC_SCOPES: z.string().trim().default("openid profile email"),
   VIBE_OIDC_REQUIRE_MFA_AMR: bool.default(false),
@@ -61,7 +61,8 @@ export type EnvConfig = z.infer<typeof envSchema>;
 
 export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const picked: Record<string, string | undefined> = {};
-  for (const key of Object.keys(envSchema.shape)) picked[key] = env[key];
+  // Empty values count as unset: the Appliance clears keys by writing KEY= (never deleting lines).
+  for (const key of Object.keys(envSchema.shape)) picked[key] = env[key] === "" ? undefined : env[key];
   const parsed = envSchema.safeParse(picked);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");

@@ -2,46 +2,37 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current state
+## Commands
 
-This repository is **pre-implementation**. It contains only `VIBE-AUTH-BUILD-PLAN.md` (v2, "Q&A-locked"). There is no code, no package manifest, no CI, and no README yet. There are no build, lint, or test commands to run until Phase 1 lands.
+```
+pnpm install                                   # workspace: packages/client, packages/broker, test/ref-app
+pnpm -r run typecheck                          # tsc across all packages (broker/ref-app also check their Vite UIs)
+pnpm -r run build                              # client (tsup esm+cjs+dts), broker (tsc + vite ui), ref-app
+pnpm --filter @kisaes/vibe-auth test           # vitest: 36 unit + flow tests against an in-process fake OpenID provider
+pnpm --filter @kisaes/vibe-auth exec vitest run test/flow.test.ts -t "back-channel"   # one test
+cd test && cp .env.example .env && docker compose -f compose.yml --env-file .env up -d --build
+node test/scripts/integration.mjs              # real authentik 2026.8 + broker + ref-app matrix (http://localhost:18080)
+docker compose -f test/compose.yml --env-file test/.env down -v
+```
 
-`VIBE-AUTH-BUILD-PLAN.md` is the source of truth. Read it in full before doing any work. Its structure:
+The Docker build context is the repo root (`.dockerignore` excludes node_modules; never `COPY` a host `node_modules`). Port 8080 is used by other projects on the dev box; the test stack listens on 18080.
 
-- **§1 Locked decisions (D1–D24)** — design choices that are fixed. Do not relitigate them; if a decision must change, amend the table and add a `QUESTIONS.md` entry.
-- **§2 Appliance compatibility contract** — the *only* touch points between Vibe Auth and the Vibe Appliance (names, manifest schema, console behaviour, Caddy, backup, issuer split, resources, boot tolerance). Only Phase 0 findings may amend it.
-- **§3 Phases 0–9** — the execution order, each with hard exit gates.
-- **§5 Audit event schema**, **§6 Integration matrix** (filled in Phase 0), **§7 QUESTIONS.md**, **§8 STATE.md**, **§9 Human checkpoints H1–H4**.
+## Source of truth
 
-The build is meant to run as autonomous, phased Claude Code work. Human checkpoints are listed in §9 and nowhere else; everything else runs unattended. Keep `STATE.md` (§8) current as phases progress.
+`VIBE-AUTH-BUILD-PLAN.md` (locked decisions D1–D24, §2 contract) as amended by `COMPAT.md` (Phase 0 findings with file:line refs). `QUESTIONS.md` holds the open decisions for the human; `STATE.md` tracks phases. Do not relitigate a locked decision; if reality contradicts one, amend §2 and add a QUESTIONS item.
 
-## Phase ordering rules
+Key amendments already made: authentik ≥2025 needs no Redis (no cache service); authentik supports subpath (`AUTHENTIK_WEB__PATH=/auth/`) so the default routing is `/auth/` on the product host instead of `:8443` (D9 kept as `VIBE_AUTH_ROUTING=port`); the Appliance manifest gained `provides`/`requires`/`sso`/`routing.mounts`; three products are Fastify (engine is framework-neutral); `end_session_endpoint` is never rewritten to the internal base.
 
-- **Phase 0 blocks everything.** It is read-only discovery against a workspace with every Vibe repo checked out (D19). Output is `COMPAT.md` with file/line references, the filled §6 matrix, and any §2 amendments. Phase 1 must not start until `COMPAT.md` is committed and every Phase 0 checkbox is ticked (checkpoint H2).
-- Three facts are deliberately unknown until Phase 0 discovers them: the Appliance secret-injection mechanism (D15), whether any product uses stateless JWT sessions (D16), and how Vibe Connect derives client-side keys (D17). Do not assume answers to these.
-- H1 (Entra tenants) happens during Phase 1; H3 (hardware target) must be decided before Phase 7.
+## Architecture
 
-## Planned architecture
+**`packages/client` (`@kisaes/vibe-auth`)** — `engine.ts` is the framework-neutral core (`HttpRequest → HttpResponse | null`); `express.ts` and `fastify.ts` are thin adapters. Products supply `UserAdapter` + `SessionAdapter` (`adapters/types.ts`); `createPgStores({ query })` gives identity/settings/revocation stores over any SQL runner. `discovery.ts` fetches through `VIBE_OIDC_INTERNAL_BASE`, validates the public issuer, rewrites server-to-server endpoints and sends `X-Forwarded-Host/Proto` so authentik computes the public issuer. `identity.ts` (link by (issuer,sub) → verified email → JIT), `roles.ts` (D22), `tokens.ts` (ID/logout token validation), `breakglass.ts` + `cli.ts` (D12), `react/` (LoginPanel, AuthSettingsPage), `tauri.ts` (loopback login). Tests: `test/fake-idp.ts` is a full fake OP; `test/harness.ts` shows a complete integration.
 
-What the plan specifies; once code exists, verify against it rather than this summary.
+**`packages/broker`** — Express service: `bootstrap.ts` (idempotent authentik repair on top of `deploy/blueprints`), `registrations.ts` (one OAuth2 provider + application per product; env block; rotate/rebase/verify; optional forward-auth edge gate), `setup.ts` (one-time-token wizard, D13), `admin.ts` (dogfoods the client package: admins log in via authentik app `vibe-auth-admin`), `audit.ts` (Postgres + JSONL + Sentinel webhook + authentik event forwarding), `config.ts` (routing modes; Appliance hints). Broker tables are prefixed `vibe_broker_` because they share the `vibe_auth` database with authentik.
 
-**Two deliverables in one pnpm monorepo** (`packages/client`, `packages/broker`, `deploy/`, `test/`, `docs/`):
+**Appliance integration (Phase 6, lives in `../Vibe-Appliance`)** — `console/manifests/vibe-auth.json`, `apps/vibe-auth.yml`, `env-templates/per-app/vibe-auth.env.tmpl`, `lib/identity.sh` (register/rotate/disable/mode/rebase/setup-token; spawned by `console/identity.js` and by enable/disable hooks), `lib/render-caddyfile.sh` (`routing.mounts`, edge gate), `bootstrap.sh` (capability-aware boot order).
 
-1. **Broker** (`packages/broker`, Node/Express, image `ghcr.io/kisaes/vibe-auth`) — bootstraps a bundled **Authentik** IdP (upstream image pinned by digest, never forked; configured via blueprints), exposes a registration API (`/registrations/{slug}`, `/rotate`, `/rebase`, `/registrations/verify`, `/health`, `/version`, authenticated by `VIBE_AUTH_CONSOLE_TOKEN`), hosts the firm admin UI and first-run setup wizard (D13, one-time token, no pre-created superuser), and emits audit events (§5). Env prefix `VIBE_AUTH_*`.
-2. **Client package** (`packages/client`, npm `@kisaes/vibe-auth`) — shared Express middleware + React components that each Vibe product embeds. OIDC Authorization Code + PKCE only (D1). Product-side env: `VIBE_OIDC_*`, `VIBE_AUTH_MODE`, `VIBE_BREAKGLASS_*`. Products integrate through **adapters**: `SessionAdapter`, `UserAdapter`, `AuditSink`, `SecretWrap`, `TenantResolver` (single-tenant default only, D18). Ships a CLI `vibe-auth breakglass ensure|rotate|status`.
+## Conventions
 
-**Key cross-cutting design points:**
-
-- **Auth modes per product** (D6/D11): `local` (default) · `both` · `oidc_only`. Enabling Vibe Auth never changes a product's mode; the firm flips each one. `oidc_only` is refused unless a break-glass local admin (`vibe-breakglass`, D12) exists and a test login succeeded.
-- **Issuer split** (§2.6): browsers see `https://auth.{host}` (or `https://{ip}:8443` in LAN mode, D9); products talk to `http://vibe-auth-authentik-server:9000`. The client discovers against the public issuer, validates `iss`, then rewrites `token_endpoint`, `jwks_uri`, `userinfo_endpoint`, `end_session_endpoint` to the internal base. `authorization_endpoint` is never rewritten.
-- **Boot tolerance** (§2.8): in `both` mode a product must start and serve local login even if IdP discovery fails; in `oidc_only` it serves the break-glass route and an "IdP unavailable" page.
-- **Identity linking** (Phase 3): `(issuer, sub)` primary; verified-email linking; JIT provisioning; unverified email denied. Roles from `roles` claim, else groups→role map (D22).
-- **Firm staff only** (D5); client-portal users never use SSO.
-- **Postgres**: shared Appliance instance, database/role `vibe_auth` (D7); bundled Postgres exists only for standalone installs (`VIBE_AUTH_PG_MODE=shared|bundled`).
-- **Platform**: amd64 only (D8). Caddy `forward_auth` edge gate is opt-in (D10).
-
-**Reference product**: `test/ref-app` (minimal Express app using the client package) is the first integration target and is used in every phase's exit gate. Trial Balance is the reference real product for roll-out (Phase 8).
-
-## Naming contract (§2.1)
-
-Compose services `vibe-auth`, `vibe-auth-authentik-server`, `vibe-auth-authentik-worker`, `vibe-auth-cache`; volumes `vibe-auth-*`; manifest slug `vibe-auth`. Authentik 9000/9443 and broker 8080 are always container-internal; only LAN mode publishes a host port (`:8443`, via Caddy). Do not introduce new names without amending §2.1.
+- authentik image is pinned by digest in three places (`deploy/compose.yml`, `test/compose.yml`, `Vibe-Appliance/apps/vibe-auth.yml`); change all three together.
+- Never log secrets; the setup token and break-glass passwords are printed once by design.
+- The client package must stay Node 20 / ESM+CJS; products range from Node 20 CJS (Trial Balance) to Node 24 ESM.

@@ -1,0 +1,141 @@
+import type { Authentik, AkGroup } from "./authentik.js";
+import type { BrokerConfig } from "./config.js";
+import type { Db } from "./db.js";
+import type { Logger } from "./log.js";
+
+/**
+ * Idempotent Authentik bootstrap (Phase 5). Blueprints in deploy/blueprints
+ * create the brand, groups, MFA-required flow and recovery flow when the
+ * container starts; this code verifies and repairs the pieces the broker
+ * depends on, so a partially-applied blueprint never leaves the system dark.
+ */
+
+export const VIBE_GROUPS = ["vibe-admin", "vibe-partner", "vibe-manager", "vibe-staff", "vibe-it"] as const;
+export const AUTH_FLOW_SLUG = "vibe-authentication";
+export const RECOVERY_FLOW_SLUG = "vibe-recovery";
+export const MFA_STAGE_NAME = "vibe-mfa-validation";
+export const SCOPE_MAPPING_NAME = "Vibe roles and groups";
+export const ADMIN_APP_SLUG = "vibe-auth-admin";
+
+export interface BootstrapResult {
+  version: string;
+  groups: Record<string, string>;
+  authorizationFlow: string;
+  invalidationFlow: string;
+  authenticationFlow: string | null;
+  scopeMappings: string[];
+  signingKey: string | null;
+  mfaRequired: boolean;
+}
+
+export const ROLES_EXPRESSION = `# Vibe Auth: expose group membership as both "groups" and "roles" claims (D22),
+# and assert the email as verified: firm accounts are administrator-managed.
+u = request.user
+mgr = getattr(u, "groups", None) or u.ak_groups
+groups = [g.name for g in mgr.all()]
+return {
+    "groups": groups,
+    "roles": [g for g in groups if g.startswith("vibe-")],
+    "email_verified": bool(u.email),
+}
+`;
+
+export async function waitForAuthentik(ak: Authentik, log: Logger, timeoutMs = 10 * 60_000): Promise<string> {
+  const start = Date.now();
+  let delay = 2000;
+  for (;;) {
+    try {
+      const v = await ak.version();
+      return v.version_current;
+    } catch (err) {
+      if (Date.now() - start > timeoutMs) throw new Error(`authentik not reachable after ${timeoutMs / 1000}s: ${(err as Error).message}`);
+      log.info("waiting for authentik", { error: (err as Error).message, retryMs: delay });
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 1.5, 15_000);
+    }
+  }
+}
+
+export async function ensureGroups(ak: Authentik): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const name of VIBE_GROUPS) {
+    let g: AkGroup | null = await ak.groupByName(name);
+    if (!g) g = await ak.createGroup({ name, is_superuser: false, attributes: { "vibe.managed": true } });
+    out[name] = g.pk;
+  }
+  return out;
+}
+
+export async function ensureScopeMapping(ak: Authentik): Promise<string[]> {
+  const all = await ak.scopeMappings();
+  let ours = all.find((m) => m.name === SCOPE_MAPPING_NAME);
+  if (!ours) ours = await ak.createScopeMapping({ name: SCOPE_MAPPING_NAME, scope_name: "profile", expression: ROLES_EXPRESSION, description: "Vibe Auth groups/roles claims" });
+  else if (ours.expression !== ROLES_EXPRESSION) await ak.updateScopeMapping(ours.pk, { expression: ROLES_EXPRESSION });
+  // Standard openid/email/profile mappings shipped by authentik (managed names).
+  const std = all.filter((m) => m.managed && /goauthentik\.io\/providers\/oauth2\/scope-(openid|email|profile)$/.test(m.managed)).map((m) => m.pk);
+  return [...new Set([...std, ours.pk])];
+}
+
+export async function setMfaRequired(ak: Authentik, required: boolean): Promise<boolean> {
+  const stage = await ak.validateStageByName(MFA_STAGE_NAME);
+  if (!stage) return false;
+  // "configure" requires configuration stages; resolve the enrolment stages by name so this
+  // never depends on what the blueprint managed to attach.
+  const setupNames = ["vibe-totp-setup", "vibe-webauthn-setup"];
+  const setup: string[] = [];
+  for (const name of setupNames) {
+    const s = (await ak.stagesByName(name))[0];
+    if (s) setup.push(s.pk);
+  }
+  await ak.patchValidateStage(stage.pk, {
+    not_configured_action: required ? "configure" : "skip",
+    ...(setup.length ? { configuration_stages: setup } : {}),
+    device_classes: ["totp", "webauthn", "static"],
+  });
+  return true;
+}
+
+export async function bootstrapAuthentik(cfg: BrokerConfig, ak: Authentik, db: Db, log: Logger): Promise<BootstrapResult> {
+  const version = await waitForAuthentik(ak, log);
+  log.info("authentik reachable", { version });
+
+  const groups = await ensureGroups(ak);
+  const scopeMappings = await ensureScopeMapping(ak);
+
+  const authz = (await ak.flowBySlug("default-provider-authorization-implicit-consent")) ?? (await ak.flowBySlug("default-provider-authorization-explicit-consent"));
+  const inval = await ak.flowBySlug("default-provider-invalidation-flow");
+  if (!authz || !inval) throw new Error("authentik default authorization/invalidation flows missing");
+  const authn = await ak.flowBySlug(AUTH_FLOW_SLUG);
+  if (!authn) log.warn("vibe authentication flow (blueprint) not found yet; providers will use the brand default flow");
+
+  // Brand: title + our flows (blueprint also sets these; repair if missing). The firm name
+  // chosen in the setup wizard wins over the env default and is carried into cfg.
+  const firm = await db.getState<{ name?: string }>("firm");
+  if (firm?.name) cfg.VIBE_AUTH_BRAND_NAME = firm.name;
+  const brand = await ak.defaultBrand();
+  if (brand) {
+    const patch: Record<string, unknown> = {};
+    if (brand.branding_title !== cfg.VIBE_AUTH_BRAND_NAME) patch.branding_title = cfg.VIBE_AUTH_BRAND_NAME;
+    if (authn && brand.flow_authentication !== authn.pk) patch.flow_authentication = authn.pk;
+    const rec = await ak.flowBySlug(RECOVERY_FLOW_SLUG);
+    if (rec && brand.flow_recovery !== rec.pk) patch.flow_recovery = rec.pk;
+    if (Object.keys(patch).length) await ak.patchBrand(String(brand.brand_uuid), patch);
+  }
+
+  // MFA enforcement (D23): default on; a logged acknowledgement can turn it off (stored in broker_state).
+  const mfaState = (await db.getState<{ required: boolean }>("mfa"))?.required ?? cfg.VIBE_AUTH_MFA_REQUIRED;
+  const applied = await setMfaRequired(ak, mfaState);
+  if (!applied) log.warn("MFA validation stage not found (blueprint not applied yet)");
+
+  const cert = await ak.firstCert();
+  return {
+    version,
+    groups,
+    authorizationFlow: authz.pk,
+    invalidationFlow: inval.pk,
+    authenticationFlow: authn?.pk ?? null,
+    scopeMappings,
+    signingKey: cert?.pk ?? null,
+    mfaRequired: mfaState,
+  };
+}

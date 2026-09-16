@@ -47,6 +47,7 @@ export async function exchangeCode(o: ExchangeOptions): Promise<TokenResponse> {
   const headers: Record<string, string> = {
     "content-type": "application/x-www-form-urlencoded",
     accept: "application/json",
+    ...o.provider.internalHeaders,
   };
   if (o.clientSecret) {
     headers.authorization = "Basic " + Buffer.from(`${encodeURIComponent(o.clientId)}:${encodeURIComponent(o.clientSecret)}`).toString("base64");
@@ -115,7 +116,7 @@ export interface UserInfo {
 
 export async function fetchUserInfo(provider: ResolvedProvider, accessToken: string, f: typeof fetch = fetch): Promise<UserInfo | null> {
   if (!provider.userinfoEndpoint) return null;
-  const res = await f(provider.userinfoEndpoint, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } });
+  const res = await f(provider.userinfoEndpoint, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", ...provider.internalHeaders } });
   if (!res.ok) return null;
   return (await res.json()) as UserInfo;
 }

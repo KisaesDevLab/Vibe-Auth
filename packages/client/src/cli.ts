@@ -93,7 +93,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 const isDirect = (() => {
   try {
     const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
-    return entry === import.meta.url || /vibe-auth(\/dist\/cli\.[cm]?js)?$/.test(process.argv[1] ?? "");
+    return entry === import.meta.url || /vibe-auth([\\/]dist[\\/]cli\.[cm]?js)?$/.test(process.argv[1] ?? "");
   } catch {
     return false;
   }

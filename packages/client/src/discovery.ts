@@ -33,6 +33,13 @@ export interface DiscoveryDocument {
 export interface ResolvedProvider {
   /** Public issuer, exactly as it must appear in iss claims (trailing slash). */
   issuer: string;
+  /**
+   * Headers to send on server-to-server calls through the internal base.
+   * Authentik derives the per-provider issuer from the request host, so the
+   * internal request must present the PUBLIC host via X-Forwarded-Host/Proto
+   * (authentik honours these from trusted proxy CIDRs, which include docker networks).
+   */
+  internalHeaders: Record<string, string>;
   /** Browser-facing (never rewritten). */
   authorizationEndpoint: string;
   endSessionEndpoint?: string;
@@ -71,6 +78,12 @@ export function issuersMatch(a: string, b: string): boolean {
   return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
 }
 
+export function forwardedHeadersFor(issuer: string, internalBase?: string): Record<string, string> {
+  if (!internalBase) return {};
+  const u = new URL(issuer);
+  return { "x-forwarded-host": u.host, "x-forwarded-proto": u.protocol.replace(":", "") };
+}
+
 export async function discover(opts: DiscoveryOptions): Promise<ResolvedProvider> {
   const f = opts.fetch ?? fetch;
   const issuer = normalizeIssuer(opts.issuer);
@@ -79,12 +92,13 @@ export async function discover(opts: DiscoveryOptions): Promise<ResolvedProvider
   // Discovery is a server-to-server call: fetch through the internal base when
   // configured, but validate the returned issuer against the PUBLIC value.
   const fetchUrl = opts.internalBase ? rewriteToInternalBase(wellKnown, opts.internalBase) : wellKnown;
+  const internalHeaders = forwardedHeadersFor(issuer, opts.internalBase);
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 5000);
   let doc: DiscoveryDocument;
   try {
-    const res = await f(fetchUrl, { signal: ctrl.signal, headers: { accept: "application/json" } });
+    const res = await f(fetchUrl, { signal: ctrl.signal, headers: { accept: "application/json", ...internalHeaders } });
     if (!res.ok) throw new Error(`discovery HTTP ${res.status} from ${fetchUrl}`);
     doc = (await res.json()) as DiscoveryDocument;
   } finally {
@@ -110,10 +124,12 @@ export async function discover(opts: DiscoveryOptions): Promise<ResolvedProvider
     cooldownDuration: 30_000,
     cacheMaxAge: 10 * 60_000,
     timeoutDuration: 5000,
+    headers: internalHeaders,
   });
 
   return {
     issuer,
+    internalHeaders,
     authorizationEndpoint: doc.authorization_endpoint,
     endSessionEndpoint: doc.end_session_endpoint,
     tokenEndpoint,

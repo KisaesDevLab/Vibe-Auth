@@ -1,0 +1,193 @@
+# Vibe Auth: sign-in flow with MFA enforced by default (D23) and a self-service password recovery flow.
+# The broker toggles MFA enforcement by patching the validation stage's not_configured_action
+# (configure = enforce, skip = disabled with a logged acknowledgement). Brand title is set by the setup wizard.
+version: 1
+metadata:
+  name: vibe-auth-flows
+  labels:
+    blueprints.goauthentik.io/description: "Vibe Auth sign-in (MFA required) and recovery flows"
+entries:
+  # ---------------------------------------------------------------- recovery flow
+  - model: authentik_flows.flow
+    id: recovery-flow
+    state: present
+    identifiers: { slug: vibe-recovery }
+    attrs:
+      name: Vibe password recovery
+      title: Reset your password
+      designation: recovery
+      authentication: require_unauthenticated
+      denied_action: message_continue
+      layout: stacked
+  - model: authentik_stages_identification.identificationstage
+    id: recovery-identification
+    state: present
+    identifiers: { name: vibe-recovery-identification }
+    attrs:
+      user_fields: [username, email]
+      case_insensitive_matching: true
+      show_matched_user: false
+      pretend_user_exists: true
+      show_source_labels: false
+  - model: authentik_stages_email.emailstage
+    id: recovery-email
+    state: present
+    identifiers: { name: vibe-recovery-email }
+    attrs:
+      use_global_settings: true
+      template: email/password_reset.html
+      subject: Reset your password
+      token_expiry: minutes=30
+      activate_user_on_success: true
+  - model: authentik_stages_prompt.prompt
+    id: recovery-prompt-password
+    state: present
+    identifiers: { name: vibe-recovery-password }
+    attrs:
+      field_key: password
+      label: New password
+      type: password
+      required: true
+      placeholder: New password (12+ characters)
+      order: 0
+  - model: authentik_stages_prompt.prompt
+    id: recovery-prompt-password-repeat
+    state: present
+    identifiers: { name: vibe-recovery-password-repeat }
+    attrs:
+      field_key: password_repeat
+      label: Repeat new password
+      type: password
+      required: true
+      placeholder: Repeat new password
+      order: 1
+  - model: authentik_stages_prompt.promptstage
+    id: recovery-prompt
+    state: present
+    identifiers: { name: vibe-recovery-prompt }
+    attrs:
+      fields:
+        - !KeyOf recovery-prompt-password
+        - !KeyOf recovery-prompt-password-repeat
+  - model: authentik_stages_user_write.userwritestage
+    id: recovery-write
+    state: present
+    identifiers: { name: vibe-recovery-write }
+    attrs:
+      user_creation_mode: never_create
+  - model: authentik_stages_user_login.userloginstage
+    id: recovery-login
+    state: present
+    identifiers: { name: vibe-recovery-login }
+    attrs:
+      session_duration: seconds=0
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers: { target: !KeyOf recovery-flow, stage: !KeyOf recovery-identification, order: 10 }
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers: { target: !KeyOf recovery-flow, stage: !KeyOf recovery-email, order: 20 }
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers: { target: !KeyOf recovery-flow, stage: !KeyOf recovery-prompt, order: 30 }
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers: { target: !KeyOf recovery-flow, stage: !KeyOf recovery-write, order: 40 }
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers: { target: !KeyOf recovery-flow, stage: !KeyOf recovery-login, order: 50 }
+
+  # ---------------------------------------------------------------- authentication flow (MFA required)
+  - model: authentik_flows.flow
+    id: auth-flow
+    state: present
+    identifiers: { slug: vibe-authentication }
+    attrs:
+      name: Vibe sign-in
+      title: Sign in
+      designation: authentication
+      authentication: require_unauthenticated
+      denied_action: message_continue
+      layout: stacked
+  - model: authentik_stages_password.passwordstage
+    id: password
+    state: present
+    identifiers: { name: vibe-password }
+    attrs:
+      backends:
+        - authentik.core.auth.InbuiltBackend
+        - authentik.core.auth.TokenBackend
+        - authentik.sources.ldap.auth.LDAPBackend
+      configure_flow: !Find [authentik_flows.flow, [slug, default-password-change]]
+      failed_attempts_before_cancel: 5
+  - model: authentik_stages_identification.identificationstage
+    id: identification
+    state: present
+    identifiers: { name: vibe-identification }
+    attrs:
+      user_fields: [username, email]
+      password_stage: !KeyOf password
+      case_insensitive_matching: true
+      show_matched_user: true
+      show_source_labels: true
+      pretend_user_exists: true
+      recovery_flow: !KeyOf recovery-flow
+  - model: authentik_stages_authenticator_totp.authenticatortotpstage
+    id: totp-setup
+    state: present
+    identifiers: { name: vibe-totp-setup }
+    attrs:
+      digits: 6
+      friendly_name: Authenticator app (TOTP)
+  - model: authentik_stages_authenticator_webauthn.authenticatorwebauthnstage
+    id: webauthn-setup
+    state: present
+    identifiers: { name: vibe-webauthn-setup }
+    attrs:
+      friendly_name: Security key or passkey
+      user_verification: preferred
+      resident_key_requirement: preferred
+  - model: authentik_stages_authenticator_static.authenticatorstaticstage
+    id: static-setup
+    state: present
+    identifiers: { name: vibe-recovery-codes-setup }
+    attrs:
+      token_count: 6
+      token_length: 12
+      friendly_name: Recovery codes
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa
+    state: created
+    identifiers: { name: vibe-mfa-validation }
+    attrs:
+      not_configured_action: configure
+      device_classes: [totp, webauthn, static]
+      configuration_stages:
+        - !KeyOf totp-setup
+        - !KeyOf webauthn-setup
+      last_auth_threshold: seconds=0
+      webauthn_user_verification: preferred
+  - model: authentik_stages_user_login.userloginstage
+    id: login
+    state: present
+    identifiers: { name: vibe-user-login }
+    attrs:
+      session_duration: seconds=0
+      remember_me_offset: seconds=0
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers: { target: !KeyOf auth-flow, stage: !KeyOf identification, order: 10 }
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers: { target: !KeyOf auth-flow, stage: !KeyOf mfa, order: 20 }
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers: { target: !KeyOf auth-flow, stage: !KeyOf login, order: 30 }
+
+  # ---------------------------------------------------------------- brand: use our flows (title is set by the setup wizard)
+  - model: authentik_brands.brand
+    state: present
+    identifiers: { domain: authentik-default }
+    attrs:
+      flow_authentication: !KeyOf auth-flow
+      flow_recovery: !KeyOf recovery-flow

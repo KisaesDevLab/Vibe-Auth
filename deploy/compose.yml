@@ -1,0 +1,177 @@
+# Vibe Auth deploy profile (§2.1 / Phase 5).
+#
+#   Appliance (default):  docker compose -f deploy/compose.yml --env-file deploy/.env up -d
+#                         → joins vibe_net, uses the shared Appliance Postgres (VIBE_AUTH_PG_MODE=shared)
+#   Standalone:           docker compose -f deploy/compose.yml --env-file deploy/.env --profile bundled up -d
+#                         → adds a private Postgres 16 (VIBE_AUTH_PG_MODE=bundled)
+#   LAN "port" routing:   add --profile port to publish https://{ip}:8443 through a dedicated Caddy (D9 fallback, Q7)
+#
+# Services never publish ports themselves (Appliance rule); the Appliance Caddy routes
+# {host}/auth/* → vibe-auth-authentik-server:9000 and {host}/vibe-auth/* → vibe-auth:8080.
+name: vibe
+
+x-authentik: &authentik
+  image: ghcr.io/goauthentik/server:2026.8.2@sha256:ff8489a5af4f4fe415ffd180a8e3c10b120bc2592d13d79dac050d977f7b9ecd
+  restart: unless-stopped
+  environment:
+    AUTHENTIK_SECRET_KEY: ${VIBE_AUTH_AUTHENTIK_SECRET_KEY:?set VIBE_AUTH_AUTHENTIK_SECRET_KEY}
+    AUTHENTIK_POSTGRESQL__HOST: ${VIBE_AUTH_PG_HOST:-postgres}
+    AUTHENTIK_POSTGRESQL__PORT: ${VIBE_AUTH_PG_PORT:-5432}
+    AUTHENTIK_POSTGRESQL__NAME: ${VIBE_AUTH_PG_NAME:-vibe_auth}
+    AUTHENTIK_POSTGRESQL__USER: ${VIBE_AUTH_PG_USER:-vibe_auth}
+    AUTHENTIK_POSTGRESQL__PASSWORD: ${VIBE_AUTH_PG_PASSWORD:?set VIBE_AUTH_PG_PASSWORD}
+    # Service-account API token for the broker; NO bootstrap password → akadmin has no usable password (D13).
+    AUTHENTIK_BOOTSTRAP_TOKEN: ${VIBE_AUTH_AUTHENTIK_TOKEN:?set VIBE_AUTH_AUTHENTIK_TOKEN}
+    AUTHENTIK_BOOTSTRAP_EMAIL: ${VIBE_AUTH_AKADMIN_EMAIL:-akadmin@localhost}
+    # Subpath routing (COMPAT.md amendment 4). Set to / for subdomain or port routing.
+    AUTHENTIK_WEB__PATH: ${VIBE_AUTH_AUTHENTIK_PATH:-/auth/}
+    AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+    AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
+    AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    AUTHENTIK_LOG_LEVEL: ${VIBE_AUTH_AUTHENTIK_LOG_LEVEL:-info}
+    AUTHENTIK_EMAIL__HOST: ${VIBE_AUTH_SMTP_HOST:-}
+    AUTHENTIK_EMAIL__PORT: ${VIBE_AUTH_SMTP_PORT:-587}
+    AUTHENTIK_EMAIL__USERNAME: ${VIBE_AUTH_SMTP_USER:-}
+    AUTHENTIK_EMAIL__PASSWORD: ${VIBE_AUTH_SMTP_PASS:-}
+    AUTHENTIK_EMAIL__USE_TLS: ${VIBE_AUTH_SMTP_TLS:-true}
+    AUTHENTIK_EMAIL__FROM: ${VIBE_AUTH_SMTP_FROM:-vibe-auth@localhost}
+  volumes:
+    - vibe-auth-media:/media
+    - vibe-auth-templates:/templates
+    - ./blueprints:/blueprints/vibe:ro
+  networks: [vibe_net]
+
+services:
+  vibe-auth-authentik-server:
+    <<: *authentik
+    container_name: vibe-auth-authentik-server
+    command: server
+    depends_on:
+      vibe-auth-db-init: { condition: service_completed_successfully, required: false }
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 30s
+      start_period: 90s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: 1g }
+        reservations: { memory: 512m }
+
+  vibe-auth-authentik-worker:
+    <<: *authentik
+    container_name: vibe-auth-authentik-worker
+    command: worker
+    volumes:
+      - vibe-auth-media:/media
+      - vibe-auth-templates:/templates
+      - vibe-auth-certs:/certs
+      - ./blueprints:/blueprints/vibe:ro
+    depends_on:
+      vibe-auth-db-init: { condition: service_completed_successfully, required: false }
+    deploy:
+      resources:
+        limits: { memory: 768m }
+        reservations: { memory: 384m }
+
+  vibe-auth:
+    image: ${VIBE_AUTH_IMAGE:-ghcr.io/kisaes/vibe-auth:latest}
+    container_name: vibe-auth
+    restart: unless-stopped
+    environment:
+      VIBE_AUTH_PORT: "8080"
+      VIBE_AUTH_BASE_PATH: /vibe-auth
+      VIBE_AUTH_ROUTING: ${VIBE_AUTH_ROUTING:-subpath}
+      VIBE_AUTH_HOST: ${VIBE_AUTH_HOST:?set VIBE_AUTH_HOST (domain, Tailscale FQDN or LAN IP)}
+      VIBE_AUTH_SCHEME: ${VIBE_AUTH_SCHEME:-https}
+      VIBE_AUTH_AUTHENTIK_PATH: ${VIBE_AUTH_AUTHENTIK_PATH:-/auth/}
+      VIBE_AUTH_PORT_EXTERNAL: ${VIBE_AUTH_PORT_EXTERNAL:-8443}
+      VIBE_AUTH_PUBLIC_URL: ${VIBE_AUTH_PUBLIC_URL:-}
+      VIBE_AUTH_AUTHENTIK_INTERNAL: http://vibe-auth-authentik-server:9000
+      VIBE_AUTH_AUTHENTIK_TOKEN: ${VIBE_AUTH_AUTHENTIK_TOKEN}
+      VIBE_AUTH_CONSOLE_TOKEN: ${VIBE_AUTH_CONSOLE_TOKEN:?set VIBE_AUTH_CONSOLE_TOKEN}
+      VIBE_AUTH_SECRET_KEY: ${VIBE_AUTH_SECRET_KEY:?set VIBE_AUTH_SECRET_KEY (hex32)}
+      VIBE_AUTH_PG_MODE: ${VIBE_AUTH_PG_MODE:-shared}
+      VIBE_AUTH_DATABASE_URL: postgresql://${VIBE_AUTH_PG_USER:-vibe_auth}:${VIBE_AUTH_PG_PASSWORD}@${VIBE_AUTH_PG_HOST:-postgres}:${VIBE_AUTH_PG_PORT:-5432}/${VIBE_AUTH_PG_NAME:-vibe_auth}
+      VIBE_AUTH_PG_ADMIN_URL: ${VIBE_AUTH_PG_ADMIN_URL:-}
+      VIBE_AUTH_SETUP_TOKEN: ${VIBE_AUTH_SETUP_TOKEN:-}
+      VIBE_AUTH_BRAND_NAME: ${VIBE_AUTH_BRAND_NAME:-Vibe Auth}
+      VIBE_AUTH_MFA_REQUIRED: ${VIBE_AUTH_MFA_REQUIRED:-true}
+      VIBE_AUTH_SENTINEL_URL: ${VIBE_AUTH_SENTINEL_URL:-}
+      VIBE_AUTH_SENTINEL_TOKEN: ${VIBE_AUTH_SENTINEL_TOKEN:-}
+      VIBE_AUTH_LOG_LEVEL: ${VIBE_AUTH_LOG_LEVEL:-info}
+    volumes:
+      - vibe-auth-data:/data
+    labels:
+      vibe.backup.contract: /app/backup.contract.yaml
+      com.kisaes.vibe.product: vibe-auth
+    networks: [vibe_net]
+    depends_on:
+      vibe-auth-authentik-server: { condition: service_started }
+    deploy:
+      resources:
+        limits: { memory: 256m }
+        reservations: { memory: 128m }
+
+  # One-shot: creates database/role in the shared Postgres when VIBE_AUTH_PG_ADMIN_URL is set (D7).
+  vibe-auth-db-init:
+    image: ${VIBE_AUTH_IMAGE:-ghcr.io/kisaes/vibe-auth:latest}
+    container_name: vibe-auth-db-init
+    restart: "no"
+    environment:
+      VIBE_AUTH_HOST: ${VIBE_AUTH_HOST:-localhost}
+      VIBE_AUTH_AUTHENTIK_TOKEN: ${VIBE_AUTH_AUTHENTIK_TOKEN}
+      VIBE_AUTH_CONSOLE_TOKEN: ${VIBE_AUTH_CONSOLE_TOKEN}
+      VIBE_AUTH_SECRET_KEY: ${VIBE_AUTH_SECRET_KEY}
+      VIBE_AUTH_DATABASE_URL: postgresql://${VIBE_AUTH_PG_USER:-vibe_auth}:${VIBE_AUTH_PG_PASSWORD}@${VIBE_AUTH_PG_HOST:-postgres}:${VIBE_AUTH_PG_PORT:-5432}/${VIBE_AUTH_PG_NAME:-vibe_auth}
+      VIBE_AUTH_PG_ADMIN_URL: ${VIBE_AUTH_PG_ADMIN_URL:-}
+    command: ["node", "dist/db-init.js"]
+    networks: [vibe_net]
+    depends_on:
+      postgres: { condition: service_healthy, required: false }
+
+  # ---- standalone only (D7 bundled mode)
+  postgres:
+    profiles: [bundled]
+    image: postgres:16-alpine
+    container_name: vibe-auth-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${VIBE_AUTH_PG_NAME:-vibe_auth}
+      POSTGRES_USER: ${VIBE_AUTH_PG_USER:-vibe_auth}
+      POSTGRES_PASSWORD: ${VIBE_AUTH_PG_PASSWORD}
+    volumes:
+      - vibe-auth-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${VIBE_AUTH_PG_USER:-vibe_auth} -d ${VIBE_AUTH_PG_NAME:-vibe_auth}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [vibe_net]
+
+  # ---- LAN "port" routing fallback (D9): https://{ip}:8443 with Caddy's internal CA (IP SAN).
+  vibe-auth-edge:
+    profiles: [port]
+    image: caddy:2-alpine
+    container_name: vibe-auth-edge
+    restart: unless-stopped
+    ports:
+      - "${VIBE_AUTH_PORT_EXTERNAL:-8443}:8443"
+    volumes:
+      - ./caddy.port.Caddyfile:/etc/caddy/Caddyfile:ro
+      - vibe-auth-edge-data:/data
+    networks: [vibe_net]
+
+volumes:
+  vibe-auth-media:
+  vibe-auth-templates:
+  vibe-auth-certs:
+  vibe-auth-data:
+  vibe-auth-pgdata:
+  vibe-auth-edge-data:
+
+networks:
+  vibe_net:
+    name: vibe_net
+    external: ${VIBE_AUTH_NET_EXTERNAL:-true}

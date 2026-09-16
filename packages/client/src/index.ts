@@ -8,7 +8,7 @@ export { createPgStores, createPgIdentityStore, createPgSettingsStore, createPgR
 export { MemorySettingsStore, plaintextSecretWrap, resolveEffectiveConfig } from "./settings.js";
 export { consoleAuditSink, combineAuditSinks, makeAudit, type Audit } from "./audit.js";
 export { loadEnvConfig, envSchema, defaultRoleMapFor, DEFAULT_VIBE_GROUPS, AUTH_MODES, type AuthMode, type EnvConfig, type EffectiveConfig, type OidcConfig, type RoleVocabulary } from "./config.js";
-export { discover, rewriteToInternalBase, normalizeIssuer, type ResolvedProvider, type DiscoveryDocument } from "./discovery.js";
+export { discover, rewriteToInternalBase, normalizeIssuer, forwardedHeadersFor, type ResolvedProvider, type DiscoveryDocument } from "./discovery.js";
 export { resolveRole, amrSatisfiesMfa, mostPrivileged, type RoleResolution } from "./roles.js";
 export { linkOrProvision, type LinkResult } from "./identity.js";
 export { validateIdToken, validateLogoutToken, exchangeCode, fetchUserInfo, type IdTokenClaims } from "./tokens.js";

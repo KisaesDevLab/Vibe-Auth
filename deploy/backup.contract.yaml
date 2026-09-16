@@ -1,0 +1,31 @@
+# Vibe Backup contract (§2.5). Discovered through the container label vibe.backup.contract.
+# Restore order across modules is a runbook step (Postgres → vibe-auth → products); see QUESTIONS.md Q9.
+module: vibe-auth
+schema: 1
+databases:
+  - vibe_auth
+volumes:
+  - vibe-auth-media
+  - vibe-auth-data
+secrets:
+  - name: VIBE_AUTH_AUTHENTIK_SECRET_KEY
+    source: env
+    criticality: fatal
+    note: Signs authentik cookies/tokens; changing it invalidates sessions but not data.
+  - name: VIBE_AUTH_SECRET_KEY
+    source: env
+    criticality: fatal
+    note: Wraps product client secrets stored by the broker. Without it every product must be re-registered (Fix in the console).
+  - name: VIBE_AUTH_AUTHENTIK_TOKEN
+    source: env
+    criticality: recoverable
+    note: Broker→authentik API token. A new one can be minted from the authentik admin UI.
+  - name: VIBE_AUTH_CONSOLE_TOKEN
+    source: env
+    criticality: recoverable
+external_state:
+  - "Entra ID / Google client secrets (stored encrypted inside the vibe_auth database)"
+hooks:
+  post_restore: /app/hooks/post-restore.sh
+reauth_required_after_restore:
+  - "All users: sessions are invalidated; MFA devices are restored with the database."

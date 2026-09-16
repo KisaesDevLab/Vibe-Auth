@@ -189,9 +189,14 @@ export class VibeAuth {
     return this.provider !== null;
   }
 
+  /**
+   * The product's public base INCLUDING its path prefix (what the broker registers as
+   * baseUrl and builds redirect URIs from), e.g. https://firm.example/tb. Not combined
+   * with basePath — VIBE_OIDC_PUBLIC_URL already carries it.
+   */
   private publicBase(): string | undefined {
     const base = this.opts.publicUrl ?? this.env.VIBE_OIDC_PUBLIC_URL;
-    return base ? base.replace(/\/+$/, "") + this.basePath : undefined;
+    return base ? base.replace(/\/+$/, "") : undefined;
   }
 
   /** Discovery with retry/backoff; resolves null when the IdP is unreachable. */
@@ -430,8 +435,8 @@ export class VibeAuth {
         accessToken: tokens.access_token,
         clockTolerance: oidc.clockTolerance,
       });
-      // Userinfo fallback when the ID token lacks profile/email or role claims.
-      const needsUserinfo = !claims.email || (!claims[oidc.roleClaim] && !claims[oidc.groupsClaim]);
+      // Userinfo fallback when the ID token lacks email, email_verified, or role/group claims.
+      const needsUserinfo = !claims.email || claims.email_verified === undefined || (!claims[oidc.roleClaim] && !claims[oidc.groupsClaim]);
       if (needsUserinfo) {
         const info = await fetchUserInfo(provider, tokens.access_token, this.fetchImpl).catch(() => null);
         if (info && info.sub === claims.sub) claims = { ...info, ...claims, email: claims.email ?? info.email, email_verified: claims.email_verified ?? info.email_verified, name: claims.name ?? info.name };
@@ -587,8 +592,8 @@ export class VibeAuth {
       ended = await this.session.destroyByIdentity({ issuer: provider.issuer, subject: parsed.sub, sid: parsed.sid, userId });
     }
     if (this.revocations && (userId || parsed.sid)) {
-      // Reject tokens issued up to now; JWT products bound this by their own max token lifetime.
-      await this.revocations.revoke({ userId, sid: parsed.sid }, new Date(Date.now() + 24 * 60 * 60_000));
+      // Reject tokens issued up to now (a later login stays valid); the record lives 24 h, longer than any product token.
+      await this.revocations.revoke({ userId, sid: parsed.sid }, new Date(), new Date(Date.now() + 24 * 60 * 60_000));
     }
     await this.audit("vibe.auth.logout", { user_id: userId, method: "oidc", initiated_by: "idp", sid: parsed.sid, sessions_ended: ended });
     return { status: 200, headers: { "cache-control": "no-store" }, body: "" };

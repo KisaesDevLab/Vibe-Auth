@@ -1,0 +1,21 @@
+# Test edge: mirrors the Appliance single-host layout —
+#   /auth/*       → authentik (routing.mounts, no prefix strip; AUTHENTIK_WEB__PATH=/auth/)
+#   /vibe-auth/*  → broker (path-mounted app)
+#   /ref/*        → reference product (path-mounted app, VITE_BASE_PATH=/ref/)
+{
+	auto_https off
+}
+
+:8080 {
+	handle /auth/* {
+		reverse_proxy vibe-auth-authentik-server:9000
+	}
+	handle /vibe-auth/* {
+		reverse_proxy vibe-auth:8080
+	}
+	handle /ref/* {
+		reverse_proxy ref-app:3005
+	}
+	redir /ref /ref/ permanent
+	redir / /ref/ permanent
+}

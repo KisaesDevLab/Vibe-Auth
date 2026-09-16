@@ -88,8 +88,12 @@ export interface SessionAdapter {
 
 /** Revocation list adapter for stateless-JWT products (D16, Phase 3). */
 export interface RevocationList {
-  /** Revoke everything for a user (or a specific sid) until the given time. */
-  revoke(key: { userId?: string; sid?: string }, until: Date): Promise<void>;
+  /**
+   * Record that every token for this user (or sid) issued at or before `revokedAt`
+   * is invalid. The record itself expires at `until` (the product's max token lifetime);
+   * tokens issued AFTER `revokedAt` (a fresh login) stay valid.
+   */
+  revoke(key: { userId?: string; sid?: string }, revokedAt: Date, until: Date): Promise<void>;
   /** True if a token for this user/sid issued at iat (ms) should be rejected. */
   isRevoked(key: { userId?: string; sid?: string }, issuedAtMs: number): Promise<boolean>;
 }

@@ -51,48 +51,55 @@ The only touch points between Vibe Auth and the Appliance. Phase 0 findings may 
 ### 2.1 Naming
 | Kind | Name |
 |---|---|
-| Compose services | `vibe-auth`, `vibe-auth-authentik-server`, `vibe-auth-authentik-worker`, `vibe-auth-cache` |
+| Compose services | `vibe-auth`, `vibe-auth-authentik-server`, `vibe-auth-authentik-worker` — *amended (Phase 0): no `vibe-auth-cache`; authentik ≥2025 has no Redis dependency* |
 | Docker network | joins the Appliance shared network (`APPLIANCE_NETWORK`, Phase 0); creates none |
 | Volumes | `vibe-auth-media`, `vibe-auth-templates`, `vibe-auth-certs`, `vibe-auth-data` |
 | Postgres | `vibe_auth` / `vibe_auth` on `APPLIANCE_PG_HOST` |
-| Published ports | none in Domain/Tailscale mode. LAN mode: Caddy publishes `:8443` for Authentik (D9). Authentik 9000/9443 and broker 8080 are always container-internal |
+| Published ports | none in any mode by default — *amended (Phase 0, Q7): authentik supports subpath (`AUTHENTIK_WEB__PATH=/auth/`) and the Appliance forbids app overlays from publishing ports, so authentik is served at `{host}/auth/` (LAN, Tailscale, single-host domain) or `auth.{host}/auth/` (subdomain-per-app). The D9 `:8443` design survives as `VIBE_AUTH_ROUTING=port` + `deploy/caddy.port.Caddyfile` (`--profile port`). Emergency port 5180 (broker console only).* Authentik 9000/9443 and broker 8080 are always container-internal |
 | Env prefix (broker) | `VIBE_AUTH_*` |
 | Env prefix (products) | `VIBE_OIDC_*`, `VIBE_AUTH_MODE`, `VIBE_BREAKGLASS_*` |
 | Manifest slug | `vibe-auth` |
 
 ### 2.2 Manifest schema additions (Appliance repo)
+*Amended (Phase 0): the schema had no `provides`/`requires`; both were added (enum `identity`), plus `sso` and `routing.mounts`. There is no `core` field; `ownsInfra` is foreign-runtime-only, so vibe-auth uses `provides` instead. The broker is a normal path-mounted app; authentik is a mount.*
 ```json
-{ "slug": "vibe-auth", "provides": ["identity"], "requires": [], "core": true,
-  "routing": { "domain": "auth.{host}", "tailscale": "auth.{host}", "lan": ":8443" },
-  "healthcheck": "http://vibe-auth:8080/health" }
+{ "slug": "vibe-auth", "provides": ["identity"], "subdomain": "auth", "pathPrefix": "vibe-auth",
+  "routing": { "default_upstream": "vibe-auth:8080",
+               "mounts": [{ "path": "/auth", "upstream": "vibe-auth-authentik-server:9000" }] },
+  "health": "/vibe-auth/health", "emergencyPort": 5180, "resources": { "cores": 1, "ramMb": 2048 } }
 ```
 Per SSO-capable product:
 ```json
 { "requires": ["identity"],
   "sso": { "capable": true,
-           "redirect_paths": ["/auth/oidc/callback"],
-           "logout_paths": ["/auth/oidc/backchannel"],
-           "public_paths": ["/webhooks/*", "/api/health"] } }
+           "redirectPaths": ["/auth/oidc/callback"],
+           "logoutPaths": ["/auth/oidc/backchannel"],
+           "publicPaths": ["/webhooks/*", "/api/health"],
+           "edgeGate": false,
+           "breakglassService": "vibe-tb-server",
+           "breakglassCommand": ["node", "node_modules/@kisaes/vibe-auth/dist/cli.js", "breakglass", "ensure", "--json"] } }
 ```
-`requires` affects install order only; a product installs fine without Vibe Auth present.
+`requires` affects boot order only (bootstrap.sh's topological sort); a product installs fine without Vibe Auth present.
 
 ### 2.3 Console behaviour (Appliance repo)
-1. Topological install order on `requires`/`provides`. `vibe-auth` is installed only when the firm selects it (`--with vibe-auth` or console toggle), never implicitly.
-2. On `vibe-auth` healthy: for each `sso.capable` product, `POST http://vibe-auth:8080/registrations` → receive `VIBE_OIDC_*` block → write to product secrets via the mechanism locked in Phase 0 → **do not change `VIBE_AUTH_MODE`** (D11).
+*Locked by Phase 0 (D15): secrets are per-product env files (`/opt/vibe/env/<slug>.env`, mode 600, compose `env_file`), written with `secrets_set_kv_per_app`, and a product picks them up only on `docker compose up -d --force-recreate --no-deps`. All of the below is implemented by `lib/identity.sh` (spawned by `console/identity.js` and by the enable/disable hooks; also `sudo vibe identity …`).*
+1. Topological install order on `requires`/`provides`. `vibe-auth` is installed only when the firm selects it (console toggle or `vibe enable vibe-auth`), never implicitly.
+2. On `vibe-auth` healthy: for each `sso.capable` product, `POST http://vibe-auth:8080/vibe-auth/registrations` (console token, JSON over stdin via `docker exec vibe-console curl`) → receive `VIBE_OIDC_*` block → write to `<slug>.env` → force-recreate the product → **do not change `VIBE_AUTH_MODE`** (D11).
 3. Console "Identity" tab per product: registration status · mode toggle (`local` → `both` → `oidc_only`, with guards) · Fix · Rotate · Disable.
-4. Break-glass provisioning (D12): on first registration of a product, run `docker exec {product} npx vibe-auth breakglass ensure` (package CLI, uses the product's `UserAdapter`), capture the generated password, store it in the secret store under `VIBE_BREAKGLASS_PASSWORD_{slug}`, display once.
-5. `oidc_only` toggle is refused unless the break-glass user exists and a test login succeeded in the current console session.
+4. Break-glass provisioning (D12): on first registration of a product, run `docker exec {sso.breakglassService} {sso.breakglassCommand}` (default `npx vibe-auth breakglass ensure --json`; uses the product's `UserAdapter`), capture the generated password, store it in `vibe-auth.env` under `VIBE_BREAKGLASS_PASSWORD_{SLUG}`, display once (console output + CREDENTIALS.txt).
+5. `oidc_only` toggle is refused unless the break-glass password is stored (console) — *amended: the "test login succeeded in this session" guard lives in the product's own Settings → Authentication page (the package's settings API), which is where a test login can actually be observed; the console cannot see product sessions.*
 6. Uninstall product → `DELETE /registrations/{slug}`. Uninstall Vibe Auth → all products forced back to `local`, registrations dropped.
 7. Mode change or LAN IP change → `POST /rebase`.
 
 ### 2.4 Caddy
-`deploy/caddy.snippet` imported like other product snippets. Blocks:
-- Domain/Tailscale: `auth.{host}` → `reverse_proxy vibe-auth-authentik-server:9000`; `auth.{host}/vibe-auth/*` → `vibe-auth:8080`.
-- LAN: `https://{ip}:8443` → Authentik; `https://{ip}:8443/vibe-auth/*` → broker. Cert from Caddy internal CA with IP SAN (Caddy supports this; firms already trust the internal CA for products in LAN mode — Phase 0 confirms).
-- Optional `(vibe_edge_gate)` snippet: `forward_auth vibe-auth-authentik-server:9000 { uri /outpost.goauthentik.io/auth/caddy }` with `@public path {public_paths}` bypass; applied only when `sso.edge_gate=true` (D10).
+*Amended (Phase 0): the Appliance has no snippet-import convention; every route is generated from manifests by `lib/render-caddyfile.sh`. Implemented there:*
+- All path-mounted modes (LAN, Tailscale, single-host domain): `handle /vibe-auth/*` → broker (normal app prefix handler); `handle /auth/*` → `vibe-auth-authentik-server:9000` **without** prefix strip (`routing.mounts`), plus `redir /auth /auth/`.
+- Subdomain-per-app domain mode: vhost `auth.{domain}` with the same `/auth/*` mount inside it and the broker at root.
+- `port` fallback (original D9): `deploy/caddy.port.Caddyfile` on `:8443`, `tls internal` with the IP as SAN. Phase 0 confirmed the internal CA is **not** distributed to firm browsers ("out of v1 scope"); firms click through once per device, the same as for products today (Q11).
+- Edge gate (D10): when `sso.edgeGate=true` **and** an identity provider is enabled, the product's handler gets `forward_auth vibe-auth-authentik-server:9000 { uri /auth/outpost.goauthentik.io/auth/caddy }` with an `@…_public path {publicPaths}` bypass; the broker creates the matching `forward_single` proxy provider + `<slug>-edge` application on the embedded outpost.
 
 ### 2.5 Backup
-Vibe Backup default set includes `vibe_auth` database and `vibe-auth-media`. Restore order: Postgres → `vibe-auth` → products. Post-restore hook calls `/rebase` if the base host/IP differs, then `GET /registrations/verify`.
+Vibe Backup default set includes `vibe_auth` database and `vibe-auth-media` + `vibe-auth-data` — declared in `deploy/backup.contract.yaml` (discovered via the `vibe.backup.contract` container label). Restore order: Postgres → `vibe-auth` → products — *amended (Phase 0): Vibe Backup restores one module at a time and has no ordering; the order is a runbook step (docs/firm/runbooks.md R8, QUESTIONS Q9).* Post-restore hook (`hooks/post-restore.sh`, run in-container with `VIBE_RESTORE=1`) calls `/rebase` then `GET /registrations/verify`.
 
 ### 2.6 Issuer split
 Browser: `https://auth.{host}` or `https://{ip}:8443`. Products: `http://vibe-auth-authentik-server:9000`. Broker returns:
@@ -100,10 +107,10 @@ Browser: `https://auth.{host}` or `https://{ip}:8443`. Products: `http://vibe-au
 VIBE_OIDC_ISSUER=https://auth.{host}/application/o/{slug}/     (or https://{ip}:8443/application/o/{slug}/)
 VIBE_OIDC_INTERNAL_BASE=http://vibe-auth-authentik-server:9000
 ```
-Client package discovers against `VIBE_OIDC_ISSUER` (validates `iss`), then rewrites `token_endpoint`, `jwks_uri`, `userinfo_endpoint`, `end_session_endpoint` hosts to `VIBE_OIDC_INTERNAL_BASE`. `authorization_endpoint` never rewritten. Authentik `AUTHENTIK_HOST` set to the public URL. This removes internal-CA trust from all server-to-server calls.
+Client package discovers against `VIBE_OIDC_ISSUER` (validates `iss`), then rewrites `token_endpoint`, `jwks_uri`, `userinfo_endpoint`, `revocation_endpoint`, `introspection_endpoint` hosts to `VIBE_OIDC_INTERNAL_BASE` (an **origin**, no path — the issuer path already carries `/auth/…`). `authorization_endpoint` **and `end_session_endpoint`** are never rewritten — *amended: RP-initiated logout is a browser redirect.* *Amended: authentik derives the per-provider issuer from the request host, so the client sends `X-Forwarded-Host`/`X-Forwarded-Proto` (the public values) on every internal call; authentik honours them from trusted-proxy CIDRs (docker networks). There is no server-side `AUTHENTIK_HOST` setting.* This removes internal-CA trust from all server-to-server calls.
 
 ### 2.7 Resources
-Limits: server 1 GB, worker 768 MB, cache 128 MB, broker 256 MB; reservations half. Appliance preflight adds these.
+Limits: server 1 GB, worker 768 MB, broker 256 MB (no cache); reservations half. Manifest `resources: { cores: 1, ramMb: 2048 }` feeds the console's free-capacity pre-flight.
 
 ### 2.8 Boot tolerance
 `both` mode: product starts and serves local login if discovery fails; retries with backoff; logs `vibe.auth.idp.unreachable`. `oidc_only`: serves `/login/local` (break-glass) and an "identity provider unavailable" page.

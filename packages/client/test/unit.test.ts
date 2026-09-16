@@ -107,7 +107,7 @@ describe("revocation list (D16)", () => {
   it("rejects tokens issued before revocation until expiry", async () => {
     const r = new MemoryRevocationList();
     const now = Date.now();
-    await r.revoke({ userId: "u1" }, new Date(now + 1000));
+    await r.revoke({ userId: "u1" }, new Date(now), new Date(now + 1000));
     expect(await r.isRevoked({ userId: "u1" }, now - 10)).toBe(true);
     expect(await r.isRevoked({ userId: "u2" }, now - 10)).toBe(false);
     expect(await r.isRevoked({ userId: "u1" }, now + 5000)).toBe(false);

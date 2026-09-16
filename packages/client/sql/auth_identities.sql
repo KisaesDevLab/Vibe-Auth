@@ -23,8 +23,11 @@ CREATE TABLE IF NOT EXISTS auth_settings (
 );
 
 -- Revocation list for stateless-JWT products (D16). Keys: "u:<user_id>" or "s:<sid>".
+-- Tokens issued at or before revoked_at are rejected until revoked_until (max token lifetime).
 CREATE TABLE IF NOT EXISTS auth_revocations (
   subject_key    TEXT PRIMARY KEY,
+  revoked_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   revoked_until  TIMESTAMPTZ NOT NULL
 );
+ALTER TABLE auth_revocations ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS auth_revocations_until_idx ON auth_revocations (revoked_until);

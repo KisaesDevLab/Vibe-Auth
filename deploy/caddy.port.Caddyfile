@@ -1,0 +1,16 @@
+# D9 "port" routing: https://{ip}:8443 → authentik, https://{ip}:8443/vibe-auth/* → broker.
+# Cert: Caddy internal CA with the IP as SAN (firms already trust/accept this CA for LAN-mode products).
+{
+	auto_https disable_redirects
+}
+
+:8443 {
+	tls internal
+	redir / /auth/ permanent
+	handle /vibe-auth/* {
+		reverse_proxy vibe-auth:8080
+	}
+	handle /auth/* {
+		reverse_proxy vibe-auth-authentik-server:9000
+	}
+}
