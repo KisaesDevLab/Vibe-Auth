@@ -352,8 +352,10 @@ export class Authentik {
 
   // ---- brand
   async defaultBrand(): Promise<Record<string, unknown> | null> {
-    const r = await this.get<Paginated<Record<string, unknown>>>("/core/brands/", { default: true });
-    return r.results[0] ?? null;
+    // Prefer the brand flagged default; on a fresh instance fall back to the built-in
+    // "authentik-default" domain, then to any brand at all.
+    const all = await this.list<Record<string, unknown>>("/core/brands/");
+    return all.find((b) => b.default === true) ?? all.find((b) => b.domain === "authentik-default") ?? all[0] ?? null;
   }
   patchBrand(uuid: string, body: Record<string, unknown>) {
     return this.patch<Record<string, unknown>>(`/core/brands/${uuid}/`, body);

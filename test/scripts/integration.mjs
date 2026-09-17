@@ -239,7 +239,7 @@ async function main() {
   const closed = await fetch(`${BROKER}/setup?token=${env.SETUP_TOKEN}`, { redirect: "manual" });
   check("setup wizard closed after completion", closed.status === 302);
   const brand = await json(`${AK}/api/v3/core/brands/?default=true`, { headers: akHeaders });
-  check("brand title set by the wizard", brand.body.results?.[0]?.branding_title === "Kisaes Test CPA", brand.body.results?.[0]?.branding_title);
+  check("brand title set by the wizard", brand.body.results?.[0]?.branding_title === "Kisaes Test CPA", `status ${brand.status} ${JSON.stringify(brand.body).slice(0, 400)}`);
   const admin = await json(`${AK}/api/v3/core/users/?username=kurt@kisaes.com`, { headers: akHeaders });
   check("first admin exists, superuser, in vibe-admin", admin.body.results?.[0]?.is_superuser === true && (admin.body.results?.[0]?.groups_obj ?? []).some((g) => g.name === "vibe-admin"));
 

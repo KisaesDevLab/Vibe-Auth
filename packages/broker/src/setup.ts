@@ -65,9 +65,11 @@ export class Setup {
     if (i.password.length < 12) return { ok: false, error: "password_too_short" };
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(i.adminEmail)) return { ok: false, error: "invalid_email" };
 
-    // Brand
+    // Brand — persisted first so a later boot repairs the title even if this patch is lost.
+    await this.db.setState("firm", { name: i.firmName });
     const brand = await this.ak.defaultBrand();
     if (brand) await this.ak.patchBrand(String(brand.brand_uuid), { branding_title: i.firmName });
+    else this.log.warn("no authentik brand found; title not set", { firmName: i.firmName });
 
     // First administrator: authentik superuser (via "authentik Admins") + vibe-admin.
     const admins = await this.ak.groupByName("authentik Admins");

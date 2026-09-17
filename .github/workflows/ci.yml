@@ -75,7 +75,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @kisaesdevlab/vibe-auth run build
       - name: Set version from tag
-        run: cd packages/client && npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+        run: cd packages/client && npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
       - run: cd packages/client && pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
