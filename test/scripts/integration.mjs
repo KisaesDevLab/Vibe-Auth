@@ -240,6 +240,8 @@ async function main() {
   check("setup wizard closed after completion", closed.status === 302);
   const brand = await json(`${AK}/api/v3/core/brands/?default=true`, { headers: akHeaders });
   check("brand title set by the wizard", brand.body.results?.[0]?.branding_title === "Kisaes Test CPA", `status ${brand.status} ${JSON.stringify(brand.body).slice(0, 400)}`);
+  const settings = await json(`${AK}/api/v3/admin/settings/`, { headers: akHeaders });
+  check("authentik base URL set by the broker (2026.8+ system setting)", !("base_url" in (settings.body ?? {})) || /^https?:\/\/[^/]+$/.test(String(settings.body.base_url)), `status ${settings.status} base_url=${JSON.stringify(settings.body?.base_url)}`);
   const admin = await json(`${AK}/api/v3/core/users/?username=kurt@kisaes.com`, { headers: akHeaders });
   check("first admin exists, superuser, in vibe-admin", admin.body.results?.[0]?.is_superuser === true && (admin.body.results?.[0]?.groups_obj ?? []).some((g) => g.name === "vibe-admin"));
 

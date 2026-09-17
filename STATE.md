@@ -31,3 +31,5 @@ Next: push the three branches/tag, run Phase 7 on the LAN box, then continue Pha
 ```
 
 2026-09-17 (first LAN-box enable, Appliance Phase 7 in progress): v1.0.2 — the broker now takes its scheme from VIBE_AUTH_APPLIANCE_ORIGIN (Appliance LAN mode is plain http on :80; COMPAT row corrected). Earlier the same day the Appliance side fixed: console image missing identity.js, DB-password extraction for VIBE_AUTH_DATABASE_URL, compose depends_on so worker + blueprints start, and Caddy no longer strips /vibe-auth (routing.stripPrefix=false).
+
+2026-09-17: v1.0.3 — authentik 2026.8 "Base URL" system setting (scheme + host, no path; required from 2026.11) is now written by the broker at bootstrap and on /rebase (ensureBaseUrl) and seeded by deploy/compose.yml via AUTHENTIK_WEB__BASE_URL; the LAN box showed "The base URL has not been configured" after the wizard.

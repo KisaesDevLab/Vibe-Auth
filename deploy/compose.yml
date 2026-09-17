@@ -25,6 +25,11 @@ x-authentik: &authentik
     AUTHENTIK_BOOTSTRAP_EMAIL: ${VIBE_AUTH_AKADMIN_EMAIL:-akadmin@localhost}
     # Subpath routing (COMPAT.md amendment 4). Set to / for subdomain or port routing.
     AUTHENTIK_WEB__PATH: ${VIBE_AUTH_AUTHENTIK_PATH:-/auth/}
+    # authentik >= 2026.8: its own public origin (scheme + host, no path;
+    # required from 2026.11). Override VIBE_AUTH_PUBLIC_ORIGIN for the
+    # subdomain profile (https://auth.<host>). The broker also writes the
+    # same value into authentik's system settings at bootstrap/rebase.
+    AUTHENTIK_WEB__BASE_URL: ${VIBE_AUTH_PUBLIC_ORIGIN:-${VIBE_AUTH_SCHEME:-https}://${VIBE_AUTH_HOST:-localhost}}
     AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
     AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
     AUTHENTIK_ERROR_REPORTING__ENABLED: "false"

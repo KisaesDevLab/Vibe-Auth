@@ -102,6 +102,31 @@ export async function ensureScopeMapping(ak: Authentik): Promise<string[]> {
   return [...new Set([...std, ours.pk])];
 }
 
+/**
+ * authentik >= 2026.8 has a "Base URL" system setting: the scheme + host it is
+ * reachable at, WITHOUT the path (everything is served under AUTHENTIK_WEB__PATH).
+ * Empty, the admin UI shows "The base URL has not been configured"; from 2026.11
+ * it is required. The deploy profile seeds it via AUTHENTIK_WEB__BASE_URL, but a
+ * value in the database wins over the env, so write it here too — at bootstrap
+ * and again on /rebase — so a host/IP/scheme change keeps it current. Older
+ * authentik (no such field) is tolerated: the PATCH is skipped, not failed.
+ */
+export async function ensureBaseUrl(cfg: BrokerConfig, ak: Authentik, log: Logger): Promise<boolean> {
+  const want = new URL(cfg.authentikPublicBase).origin;
+  let current: { base_url?: string };
+  try {
+    current = await ak.settings();
+  } catch (err) {
+    log.warn("could not read authentik settings; base URL not set", { error: (err as Error).message });
+    return false;
+  }
+  if (!("base_url" in current)) return false; // pre-2026.8 authentik
+  if (current.base_url === want) return true;
+  await ak.patchSettings({ base_url: want });
+  log.info("authentik base URL set", { base_url: want, was: current.base_url ?? "" });
+  return true;
+}
+
 export async function setMfaRequired(ak: Authentik, required: boolean): Promise<boolean> {
   const stage = await ak.validateStageByName(MFA_STAGE_NAME);
   if (!stage) return false;
@@ -150,6 +175,8 @@ export async function bootstrapAuthentik(cfg: BrokerConfig, ak: Authentik, db: D
     if (rec && brand.flow_recovery !== rec.pk) patch.flow_recovery = rec.pk;
     if (Object.keys(patch).length) await ak.patchBrand(String(brand.brand_uuid), patch);
   }
+
+  await ensureBaseUrl(cfg, ak, log);
 
   // MFA enforcement (D23): default on; a logged acknowledgement can turn it off (stored in broker_state).
   const mfaState = (await db.getState<{ required: boolean }>("mfa"))?.required ?? cfg.VIBE_AUTH_MFA_REQUIRED;

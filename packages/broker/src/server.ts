@@ -6,7 +6,7 @@ import { timingSafeEqual } from "node:crypto";
 import { buildAdmin } from "./admin.js";
 import { BrokerAudit, startEventForwarder } from "./audit.js";
 import { Authentik } from "./authentik.js";
-import { bootstrapAuthentik, type BootstrapResult } from "./bootstrap.js";
+import { bootstrapAuthentik, type BootstrapResult, ensureBaseUrl } from "./bootstrap.js";
 import { loadConfig, rebaseConfig, type BrokerConfig } from "./config.js";
 import { Db } from "./db.js";
 import { createLogger } from "./log.js";
@@ -113,6 +113,7 @@ export async function main(): Promise<void> {
     if (hasPatch) {
       cfg = rebaseConfig(cfg, patch);
       await db.setState("rebase", { ...(persisted ?? {}), ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) });
+      if (boot) await ensureBaseUrl(cfg, ak, log).catch((err: Error) => log.warn("base URL not updated on rebase", { error: err.message }));
     }
     const out = await regs.rebase(b.products ?? {});
     audit.emit({ type: "vibe.auth.registration.rebased" as never, at: new Date().toISOString(), action: "rebase", actor: "console", host: cfg.VIBE_AUTH_HOST, routing: cfg.VIBE_AUTH_ROUTING, count: out.length });

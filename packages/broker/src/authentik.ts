@@ -195,6 +195,13 @@ export class Authentik {
   system() {
     return this.get<Record<string, unknown>>("/admin/system/");
   }
+  /** System settings (authentik >= 2026.8 carries `base_url`, required from 2026.11). */
+  settings() {
+    return this.get<Record<string, unknown> & { base_url?: string }>("/admin/settings/");
+  }
+  patchSettings(body: Record<string, unknown>) {
+    return this.patch<Record<string, unknown>>("/admin/settings/", body);
+  }
 
   // ---- flows / stages / certs / mappings
   async flowBySlug(slug: string): Promise<AkFlow | null> {
