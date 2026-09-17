@@ -23,8 +23,8 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r run typecheck
       - run: pnpm -r run build
+      - run: pnpm -r run typecheck
       - run: pnpm -r run test
       - name: Validate deploy compose
         run: docker compose -f deploy/compose.yml --env-file deploy/.env.example config -q
