@@ -88,10 +88,12 @@ export function computePublicBase(c: z.infer<typeof schema>): string {
 /**
  * Derive host/scheme/routing from the Appliance-rendered origin + mode (see env template).
  *
- * The scheme follows the origin. The Appliance's LAN mode is plain HTTP on :80
- * (no :443, no internal CA), so forcing https here sent every sign-in and setup
- * URL to an address nothing listens on (ERR_SSL_PROTOCOL_ERROR in the browser).
- * Domain and Tailscale modes render an https origin and keep https.
+ * The scheme follows the origin. In the Appliance's LAN mode the origin is
+ * http://<ip>: Caddy binds :443 with `tls internal` there, but its internal CA
+ * issues no certificate for a bare IP, so https://<ip> fails the handshake
+ * (ERR_SSL_PROTOCOL_ERROR) and every product runs on http. Forcing https here
+ * sent every sign-in and setup URL to that dead address. Domain and Tailscale
+ * modes render an https origin and keep https.
  */
 export function applyApplianceHints(c: z.infer<typeof schema>): z.infer<typeof schema> {
   if (!c.VIBE_AUTH_APPLIANCE_ORIGIN) return c;
