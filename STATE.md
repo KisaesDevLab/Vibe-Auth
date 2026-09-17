@@ -29,3 +29,5 @@ Artifacts: @kisaesdevlab/vibe-auth 1.0.1 · ghcr.io/kisaesdevlab/vibe-auth:1.0.1
 Confidence: ~90% for Appliance deployment pending Phase 7; Google federation untested live; Entra out of v1.
 Next: push the three branches/tag, run Phase 7 on the LAN box, then continue Phase 8 roll-outs.
 ```
+
+2026-09-17 (first LAN-box enable, Appliance Phase 7 in progress): v1.0.2 — the broker now takes its scheme from VIBE_AUTH_APPLIANCE_ORIGIN (Appliance LAN mode is plain http on :80; COMPAT row corrected). Earlier the same day the Appliance side fixed: console image missing identity.js, DB-password extraction for VIBE_AUTH_DATABASE_URL, compose depends_on so worker + blueprints start, and Caddy no longer strips /vibe-auth (routing.stripPrefix=false).

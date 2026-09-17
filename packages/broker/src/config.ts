@@ -52,7 +52,7 @@ export const schema = z.object({
   VIBE_AUTH_SENTINEL_TOKEN: z.string().optional(),
   VIBE_AUTH_EVENT_POLL_SECONDS: z.coerce.number().int().min(0).default(30),
   VIBE_AUTH_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.1"),
+  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.2"),
 });
 
 export type BrokerConfig = z.infer<typeof schema> & {
@@ -85,13 +85,21 @@ export function computePublicBase(c: z.infer<typeof schema>): string {
   }
 }
 
-/** Derive host/scheme/routing from the Appliance-rendered origin + mode (see env template). */
-function applyApplianceHints(c: z.infer<typeof schema>): z.infer<typeof schema> {
+/**
+ * Derive host/scheme/routing from the Appliance-rendered origin + mode (see env template).
+ *
+ * The scheme follows the origin. The Appliance's LAN mode is plain HTTP on :80
+ * (no :443, no internal CA), so forcing https here sent every sign-in and setup
+ * URL to an address nothing listens on (ERR_SSL_PROTOCOL_ERROR in the browser).
+ * Domain and Tailscale modes render an https origin and keep https.
+ */
+export function applyApplianceHints(c: z.infer<typeof schema>): z.infer<typeof schema> {
   if (!c.VIBE_AUTH_APPLIANCE_ORIGIN) return c;
   const u = new URL(c.VIBE_AUTH_APPLIANCE_ORIGIN);
   const perApp = /subdomain-per-app$/.test(c.VIBE_AUTH_APPLIANCE_MODE ?? "");
   const host = perApp ? u.host.replace(/^auth\./, "") : u.host;
-  return { ...c, VIBE_AUTH_HOST: host, VIBE_AUTH_SCHEME: "https", VIBE_AUTH_ROUTING: perApp ? "subdomain" : "subpath" };
+  const scheme = u.protocol === "http:" ? "http" : "https";
+  return { ...c, VIBE_AUTH_HOST: host, VIBE_AUTH_SCHEME: scheme, VIBE_AUTH_ROUTING: perApp ? "subdomain" : "subpath" };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
