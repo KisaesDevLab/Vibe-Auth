@@ -238,8 +238,14 @@ async function main() {
   check("setup token invalidated after completion", after.body.token === null && after.body.state.done === true);
   const closed = await fetch(`${BROKER}/setup?token=${env.SETUP_TOKEN}`, { redirect: "manual" });
   check("setup wizard closed after completion", closed.status === 302);
-  const brand = await json(`${AK}/api/v3/core/brands/?default=true`, { headers: akHeaders });
-  check("brand title set by the wizard", brand.body.results?.[0]?.branding_title === "Kisaes Test CPA", `status ${brand.status} ${JSON.stringify(brand.body).slice(0, 400)}`);
+  // Same selection the broker uses (authentik.ts defaultBrand): the brand flagged
+  // default, else the built-in "authentik-default" domain, else any. A fresh
+  // 2026.8 instance can have no brand flagged default at all, which made the
+  // old `?default=true` query return [] while the wizard had patched the brand fine.
+  const brands = await json(`${AK}/api/v3/core/brands/`, { headers: akHeaders });
+  const all = brands.body.results ?? [];
+  const brandRow = all.find((b) => b.default === true) ?? all.find((b) => b.domain === "authentik-default") ?? all[0];
+  check("brand title set by the wizard", brandRow?.branding_title === "Kisaes Test CPA", `status ${brands.status} ${JSON.stringify(all.map((b) => ({ domain: b.domain, default: b.default, branding_title: b.branding_title }))).slice(0, 400)}`);
   const settings = await json(`${AK}/api/v3/admin/settings/`, { headers: akHeaders });
   check("authentik base URL set by the broker (2026.8+ system setting)", !("base_url" in (settings.body ?? {})) || /^https?:\/\/[^/]+$/.test(String(settings.body.base_url)), `status ${settings.status} base_url=${JSON.stringify(settings.body?.base_url)}`);
   const admin = await json(`${AK}/api/v3/core/users/?username=kurt@kisaes.com`, { headers: akHeaders });
