@@ -3,7 +3,7 @@
 One PR per product. Trial Balance is the reference implementation (`trial-balance-app`, see `docs/sso.md` there). Every step below has a concrete anchor in COMPAT.md §B.
 
 ## 1. Dependency and tables
-- [ ] Add `@kisaesdevlab/vibe-auth` (GitHub Packages, `.npmrc` scope `@kisaes`). CJS products (Trial Balance) use `require`; ESM products import.
+- [ ] Add `@kisaesdevlab/vibe-auth` (GitHub Packages: `.npmrc` line `@kisaesdevlab:registry=https://npm.pkg.github.com`, no token in the repo — `~/.npmrc` for developers, a BuildKit secret in Dockerfiles, `GITHUB_TOKEN` in Actions after the package grants the repo access; reference `trial-balance-app` Dockerfile.server). CJS products (Trial Balance) use `require`; ESM products import.
 - [ ] Migration that runs `sql/auth_identities.sql` (or imports `@kisaesdevlab/vibe-auth/sql/drizzle` into the Drizzle schema). Tables: `auth_identities`, `auth_settings`, `auth_revocations`.
 - [ ] If the user table lacks a disabled flag (Entity) add one; if it lacks a verified-email marker, JIT users are created with the IdP's `email_verified=true` and no column is needed.
 

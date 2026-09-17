@@ -19,7 +19,7 @@ Reads first: `VIBE-AUTH-BUILD-PLAN.md` §1 (D1–D30), `COMPAT.md` §B (the per-
 | # | Rule | Why / source |
 |---|---|---|
 | I1 | The product's local login stays intact; SSO is additive. Default mode `local`; the console or the product settings page flips it. | D6, D11 |
-| I2 | Server engine is created with **`basePath: ""`**; React components get **`basePath: import.meta.env.BASE_URL.replace(/\/$/, "")`**. Never derive the redirect URI from `basePath`; it comes from `VIBE_OIDC_PUBLIC_URL`. | Appliance Caddy strips `/<prefix>` before the API; the SPA lives under it. TB deviation #2 |
+| I2 | Server engine is created with **`basePath: ""`**; React components get **`basePath: import.meta.env.BASE_URL.replace(/\/$/, "")`**. Never derive the redirect URI from `basePath`; it comes from `VIBE_OIDC_PUBLIC_URL`. | Appliance Caddy strips `/<prefix>` before the API; the SPA lives under it. TB deviation #2 (`trial-balance-app/docs/sso.md` §Deviations) |
 | I3 | Mount `vibeAuthExpress(auth)` (or the Fastify plugin) **after** body parsers and every raw-body / webhook / health / API-key route, **before** the product's authenticated routers. Never move a webhook mounted before `express.json()`. | COMPAT §B public_paths; MyBooks/T&B/TRC raw-body webhooks |
 | I4 | `await auth.start()` at boot; let its only throw (oidc_only without break-glass) abort startup with its message. | §2.8, Phase 3 |
 | I5 | Local login route gets `guardLocalLogin` (or an equivalent that keeps the product's error envelope) **and** calls `auth.afterLocalLogin` on success. | D12 audit |
