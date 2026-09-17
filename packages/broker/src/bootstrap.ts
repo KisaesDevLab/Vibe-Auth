@@ -56,6 +56,32 @@ export async function waitForAuthentik(ak: Authentik, log: Logger, timeoutMs = 1
   }
 }
 
+/**
+ * authentik answers /admin/version/ well before its default blueprints (brand, default
+ * flows) and ours have been applied by the worker. Bootstrapping against a half-applied
+ * instance produced an empty brand list and a 500ing consent flow on a slow CI runner,
+ * so wait for the objects we depend on.
+ */
+const REQUIRED_FLOWS = ["default-provider-authorization-implicit-consent", "default-provider-invalidation-flow", "default-source-authentication", "default-source-enrollment", AUTH_FLOW_SLUG];
+
+export async function waitForDefaults(ak: Authentik, log: Logger, timeoutMs = 10 * 60_000): Promise<void> {
+  const start = Date.now();
+  for (;;) {
+    const missing: string[] = [];
+    try {
+      if (!(await ak.defaultBrand())) missing.push("brand");
+      for (const slug of REQUIRED_FLOWS) if (!(await ak.flowBySlug(slug))) missing.push(`flow:${slug}`);
+      if (!(await ak.validateStageByName(MFA_STAGE_NAME))) missing.push(`stage:${MFA_STAGE_NAME}`);
+    } catch (err) {
+      missing.push(`api:${(err as Error).message}`);
+    }
+    if (!missing.length) return;
+    if (Date.now() - start > timeoutMs) throw new Error(`authentik blueprints not applied after ${timeoutMs / 1000}s; still missing: ${missing.join(", ")}`);
+    log.info("waiting for authentik blueprints", { missing, elapsedMs: Date.now() - start });
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+}
+
 export async function ensureGroups(ak: Authentik): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const name of VIBE_GROUPS) {
@@ -98,15 +124,18 @@ export async function setMfaRequired(ak: Authentik, required: boolean): Promise<
 export async function bootstrapAuthentik(cfg: BrokerConfig, ak: Authentik, db: Db, log: Logger): Promise<BootstrapResult> {
   const version = await waitForAuthentik(ak, log);
   log.info("authentik reachable", { version });
+  await waitForDefaults(ak, log);
 
   const groups = await ensureGroups(ak);
   const scopeMappings = await ensureScopeMapping(ak);
 
-  const authz = (await ak.flowBySlug("default-provider-authorization-implicit-consent")) ?? (await ak.flowBySlug("default-provider-authorization-explicit-consent"));
+  // Implicit consent: products are first-party, so no consent screen (explicit consent would
+  // also break headless/desktop logins).
+  const authz = await ak.flowBySlug("default-provider-authorization-implicit-consent");
   const inval = await ak.flowBySlug("default-provider-invalidation-flow");
   if (!authz || !inval) throw new Error("authentik default authorization/invalidation flows missing");
   const authn = await ak.flowBySlug(AUTH_FLOW_SLUG);
-  if (!authn) log.warn("vibe authentication flow (blueprint) not found yet; providers will use the brand default flow");
+  if (!authn) throw new Error(`vibe authentication flow "${AUTH_FLOW_SLUG}" missing (blueprint not applied)`);
 
   // Brand: title + our flows (blueprint also sets these; repair if missing). The firm name
   // chosen in the setup wizard wins over the env default and is carried into cfg.

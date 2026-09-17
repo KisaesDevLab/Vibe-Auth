@@ -1,6 +1,6 @@
 {
   "name": "vibe-auth-ref-app",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Minimal Express product using @kisaesdevlab/vibe-auth — the Phase 2–7 reference integration",
   "type": "module",

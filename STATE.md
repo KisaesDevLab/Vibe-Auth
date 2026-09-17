@@ -19,9 +19,9 @@ Phase 8: Trial Balance DONE — trial-balance-app branch `vibe-auth-integration`
          SENT-V-AUTH-000..004 rules, password-only vibe-breakglass; 229/229 tests, fake-IdP e2e 22/22.
          Remaining: T&B, MyBooks, AI Router, TRC, 1099, Entity, Investments, Calculators, 1040, Recap, Connect, Backup
          (docs/integration-checklist.md).
-Phase 9: docs done. v1.0.0 tagged locally on KisaesDevLab naming (D27); push + CI publish pending a remote.
+Phase 9: docs done. v1.0.0 published (npm + GHCR); v1.0.1 adds the authentik-blueprint wait for slow hosts. Repo: github.com/KisaesDevLab/Vibe-Auth.
          H4 (runbooks executed by a non-author) outstanding.
-Artifacts: @kisaesdevlab/vibe-auth 1.0.0 · ghcr.io/kisaesdevlab/vibe-auth:1.0.0 (built by CI on tag push)
+Artifacts: @kisaesdevlab/vibe-auth 1.0.1 · ghcr.io/kisaesdevlab/vibe-auth:1.0.1 (CI on tag push)
 Confidence: ~90% for Appliance deployment pending Phase 7; Google federation untested live; Entra out of v1.
 Next: push the three branches/tag, run Phase 7 on the LAN box, then continue Phase 8 roll-outs.
 ```
