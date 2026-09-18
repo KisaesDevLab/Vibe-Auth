@@ -6,7 +6,10 @@
  *   3. create a test user in authentik (member of vibe-partner)
  *   4. drive the browser flow: ref-app /auth/oidc/start → authentik authentication flow
  *      (identification+password, then MFA ENROLMENT because MFA is enforced, then the
- *      authorization flow) → product callback, all through authentik's flow executor API
+ *      confirmation of the new device, then the authorization flow) → product callback,
+ *      all through authentik's flow executor API. The ref-app runs with
+ *      VIBE_OIDC_REQUIRE_MFA_AMR=true, so this first login only lands if the ID token's
+ *      amr carries "mfa" — the enrolment sign-in used to carry ["pwd"] alone.
  *   5. assert session, role mapping, /auth/me
  *   6. back-channel logout: end the authentik session → ref-app session gone
  *   7. second login answers the TOTP challenge with the enrolled secret
@@ -121,9 +124,14 @@ async function follow(url, jar, maxHops = 12) {
  * Drive authentik flows through the executor API until the browser would leave authentik.
  * Handles: identification(+password), MFA enrolment (TOTP), MFA validation (TOTP), consent, user-login.
  */
-const user = { username: "alice", password: "Alice-Password-12345" };
+const alicePw = { username: "alice", password: "Alice-Password-12345" };
+let user = alicePw;
 let totpSecret = null;
-async function runThroughAuthentik(startUrl, jar) {
+/** MFA codes answered at an authenticator-validate stage during the last runThroughAuthentik. */
+let validateSubmits = 0;
+async function runThroughAuthentik(startUrl, jar, as = alicePw) {
+  user = as;
+  validateSubmits = 0;
   let current = await follow(startUrl, jar);
   for (let round = 0; round < 6; round++) {
     const m = /\/auth\/if\/flow\/([^/]+)\//.exec(new URL(current.url).pathname);
@@ -173,6 +181,7 @@ async function runThroughAuthentik(startUrl, jar) {
         const totpDev = devices.find((d) => d.device_class === "totp");
         if (totpDev && totpSecret) {
           await freshTotpWindow();
+          validateSubmits++;
           ch = await execJson({ component: comp, code: totp(totpSecret), selected_challenge: totpDev });
         } else if ((ch.body.configuration_stages ?? []).length) {
           const cfg = ch.body.configuration_stages.find((s) => /totp/i.test(s.name)) ?? ch.body.configuration_stages[0];
@@ -266,7 +275,10 @@ async function main() {
   const unauth = await fetch(`${BROKER}/registrations`);
   check("registration API requires the console token", unauth.status === 401);
 
-  writeFileSync(join(testDir, "ref-app.env"), `${reg.body.envFile}\nVIBE_AUTH_MODE=both\n`);
+  // Require MFA at the IdP, the way products that skip their own second factor on SSO
+  // sessions do (Vibe 1099, 1040): the first-login check below then fails unless the
+  // enrolment sign-in's ID token carries amr "mfa".
+  writeFileSync(join(testDir, "ref-app.env"), `${reg.body.envFile}\nVIBE_AUTH_MODE=both\nVIBE_OIDC_REQUIRE_MFA_AMR=true\n`);
   compose("up -d --force-recreate --no-deps ref-app");
   for (let i = 0; i < 40; i++) {
     const h = await json(`${APP}/api/health`).catch(() => ({ status: 0 }));
@@ -292,14 +304,16 @@ async function main() {
   } else {
     alice = (await json(`${AK}/api/v3/core/users/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ username: "alice", name: "Alice Partner", email: "alice@kisaes.com", is_active: true, groups: [partner.pk], path: "users" }) })).body;
   }
-  await json(`${AK}/api/v3/core/users/${alice.pk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: user.password }) });
+  await json(`${AK}/api/v3/core/users/${alice.pk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: alicePw.password }) });
   totpSecret = null;
 
   // 4. first login: password + MFA enrolment + authorization → callback
   const jar = new Jar();
   const first = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jar);
+  check("first login (MFA enrolment) satisfies an MFA-requiring product: amr carries mfa", !/Multi-factor authentication is required/.test(first.body ?? ""), `${first.res.status} ${first.url}`);
   check("first login lands on the product after the callback", new URL(first.url).pathname === "/ref/api/me" && first.res.status === 200, `${first.res.status} ${first.url}`);
   check("TOTP was enrolled during login (MFA enforced)", !!totpSecret);
+  check("first login asks for one code after enrolment (the confirmation of the new device)", validateSubmits === 1, `codes answered: ${validateSubmits}`);
   const me = await json(`${APP}/api/me`, { headers: { cookie: jar.header() } });
   check("ref-app /api/me returns the JIT-provisioned user", me.status === 200 && me.body.user?.email === "alice@kisaes.com", JSON.stringify(me.body).slice(0, 200));
   check("role mapped vibe-partner → admin (roles claim from scope mapping)", me.body.user?.role === "admin", me.body.user?.role);
@@ -326,11 +340,42 @@ async function main() {
   const jar2 = new Jar();
   const second = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/secret`, jar2);
   check("second login validates the enrolled TOTP and lands on the product", new URL(second.url).pathname === "/ref/api/secret" && second.res.status === 200, `${second.res.status} ${second.url}`);
+  check("second login asks for one code only (no confirmation prompt once a device was validated)", validateSubmits === 1, `codes answered: ${validateSubmits}`);
   const secret = await json(`${APP}/api/secret`, { headers: { cookie: jar2.header() } });
   check("session works after second login", secret.status === 200 && secret.body.secret === "42");
   const logout = await fetch(`${APP}/auth/oidc/logout`, { redirect: "manual", headers: { cookie: jar2.header() } });
   const loc = logout.headers.get("location") ?? "";
   check("RP-initiated logout redirects to authentik end-session with id_token_hint", logout.status === 302 && /end-session/.test(loc) && /id_token_hint=/.test(loc), loc.slice(0, 120));
+
+  // 7b. MFA enforcement OFF (the broker's admin toggle sets not_configured_action=skip on the
+  // validation stage): a user with no device signs in without being asked for a code, so the
+  // post-enrolment confirmation stage can never lock anyone out. The ref-app still requires amr
+  // mfa, so it refuses the login with its MFA page — that page proves authentik let the user through.
+  const mfaStage = (await json(`${AK}/api/v3/stages/authenticator/validate/?name=vibe-mfa-validation`, { headers: akHeaders })).body.results?.[0];
+  check("MFA validation stage found", !!mfaStage);
+  await json(`${AK}/api/v3/stages/authenticator/validate/${mfaStage.pk}/`, { method: "PATCH", headers: akHeaders, body: JSON.stringify({ not_configured_action: "skip" }) });
+  try {
+    const bobPw = { username: "bob", password: "Bob-Password-12345" };
+    let bob = (await json(`${AK}/api/v3/core/users/?username=bob`, { headers: akHeaders })).body.results?.find((u) => u.username === "bob");
+    if (bob) {
+      for (const d of (await json(`${AK}/api/v3/authenticators/admin/all/?user=${bob.pk}`, { headers: akHeaders })).body ?? []) {
+        const kind = /totp/i.test(d.type) ? "totp" : /static/i.test(d.type) ? "static" : null;
+        if (kind) await fetch(`${AK}/api/v3/authenticators/admin/${kind}/${d.pk}/`, { method: "DELETE", headers: akHeaders });
+      }
+    } else {
+      bob = (await json(`${AK}/api/v3/core/users/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ username: "bob", name: "Bob Staff", email: "bob@kisaes.com", is_active: true, groups: [partner.pk], path: "users" }) })).body;
+    }
+    await json(`${AK}/api/v3/core/users/${bob.pk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: bobPw.password }) });
+    const aliceSecret = totpSecret;
+    totpSecret = null;
+    const b = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, new Jar(), bobPw);
+    const enrolled = !!totpSecret;
+    totpSecret = aliceSecret;
+    check("enforcement off: a user without a device is neither enrolled nor asked for a code", !enrolled && validateSubmits === 0, `enrolled=${enrolled} codes=${validateSubmits}`);
+    check("enforcement off: authentik completes the sign-in (the MFA-requiring product then refuses it)", new URL(b.url).pathname === "/ref/auth/oidc/callback" && /Multi-factor authentication is required/.test(b.body ?? ""), `${b.res.status} ${b.url}`);
+  } finally {
+    await json(`${AK}/api/v3/stages/authenticator/validate/${mfaStage.pk}/`, { method: "PATCH", headers: akHeaders, body: JSON.stringify({ not_configured_action: "configure" }) });
+  }
 
   // 8. rotate + verify + rebase + delete
   const rot = await json(`${BROKER}/registrations/ref-app/rotate`, { method: "POST", headers: consoleHeaders });

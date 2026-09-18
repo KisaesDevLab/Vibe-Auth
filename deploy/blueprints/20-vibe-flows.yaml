@@ -167,6 +167,35 @@ entries:
         - !KeyOf webauthn-setup
       last_auth_threshold: seconds=0
       webauthn_user_verification: preferred
+  # MFA confirmation after enrolment. authentik puts "mfa" in the ID token's amr only when
+  # the sign-in VALIDATED a device (authenticator_validate records it in
+  # auth_method_args.mfa_devices); enrolling a device in the same sign-in records nothing.
+  # So a user's first sign-in (enrol TOTP/passkey) produced amr ["pwd"], every product with
+  # VIBE_OIDC_REQUIRE_MFA_AMR=true refused it ("Multi-factor authentication is required"),
+  # and the authentik session kept replaying that login event until the user signed out.
+  # This stage asks for the new device once, and only on that path: its binding's policy
+  # passes only while no device has been validated yet (see mfa-confirm-policy).
+  # not_configured_action=skip keeps it inert when enforcement is off and the user has no device.
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa-confirm
+    state: present
+    identifiers: { name: vibe-mfa-confirm }
+    attrs:
+      not_configured_action: skip
+      device_classes: [totp, webauthn, static]
+      last_auth_threshold: seconds=0
+      webauthn_user_verification: preferred
+  - model: authentik_policies_expression.expressionpolicy
+    id: mfa-confirm-policy
+    state: present
+    identifiers: { name: vibe-mfa-confirm-needed }
+    attrs:
+      execution_logging: false
+      expression: |
+        # Run the confirmation stage only if this sign-in has not validated an MFA device yet
+        # (i.e. the user just enrolled one). Evaluated when the stage is reached (re-evaluation).
+        args = request.context.get("auth_method_args") or {}
+        return not args.get("mfa_devices")
   - model: authentik_stages_user_login.userloginstage
     id: login
     state: present
@@ -180,6 +209,19 @@ entries:
   - model: authentik_flows.flowstagebinding
     state: present
     identifiers: { target: !KeyOf auth-flow, stage: !KeyOf mfa, order: 20 }
+  - model: authentik_flows.flowstagebinding
+    id: mfa-confirm-binding
+    state: present
+    identifiers: { target: !KeyOf auth-flow, stage: !KeyOf mfa-confirm, order: 25 }
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+  - model: authentik_policies.policybinding
+    state: present
+    identifiers: { target: !KeyOf mfa-confirm-binding, policy: !KeyOf mfa-confirm-policy, order: 0 }
+    attrs:
+      enabled: true
+      timeout: 30
   - model: authentik_flows.flowstagebinding
     state: present
     identifiers: { target: !KeyOf auth-flow, stage: !KeyOf login, order: 30 }
