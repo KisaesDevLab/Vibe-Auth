@@ -39,12 +39,12 @@ These are not in `INTEGRATION-PLAN.md`; they were learned enabling Vibe Auth and
 | 1 | Time & Billing | `vibe-time-billing.md` | Express + Redis sessions, Tauri | 3–4 h | planned |
 | 2 | MyBooks | `mybooks.md` | Express + JWT | 3 h | planned |
 | 3 | AI Router | `vibe-ai-router.md` | Fastify + memory sessions | 2 h | planned |
-| 4 | Tax Research Chat | `vibe-tax-research-chat.md` | Express + JWT | 2–3 h | planned |
+| 4 | Tax Research Chat | `vibe-tax-research-chat.md` | Express + JWT | 2–3 h | implemented on branch `feat/sso-vibe-auth` (`05def3e`, `57dc67e`); not merged, no pull request yet |
 | 5 | 1099 | `vibe-1099.md` | Express + Redis sessions | 2 h | planned |
 | 6 | Entity | `vibe-entity.md` | Express + Postgres sessions | 2 h | planned |
 | 7 | Investments | `vibe-investments.md` | Express + Postgres sessions | 2–3 h | planned |
 | 8 | Calculators | `vibe-calculators.md` | Express + Postgres sessions, distroless | 2 h | planned |
-| 9 | 1040 | `vibe-1040.md` | Fastify + Postgres sessions, MFA gate | 2–3 h | planned |
+| 9 | 1040 | `vibe-1040.md`, findings in `vibe-1040-findings.md` | Fastify + Postgres sessions, MFA gate | 2–3 h | implemented 2026-09-19 (`Vibe-1040` PR #1); **exit gate not met** — no real-browser or real-authentik sign-in yet, appliance manifest pending |
 | 10 | Recap | `vibe-recap.md` | Fastify + Postgres sessions | 2 h | planned |
 | 11 | Connect | `vibe-connect.md` | Express + express-session, existing OIDC, Tauri | 3–4 h | planned |
 | 12 | Backup | `vibe-backup.md` | Go, no auth, console-proxied | 0.5 h docs | decided: no in-app SSO |
