@@ -4,6 +4,12 @@ Repo `Vibe-AI-Router` · slug `vibe-ai-router` · **Fastify 5** · in-memory HMA
 
 Variant: **Fastify** (`vibeAuthFastify` + `@fastify/formbody`). Read `README.md`, `../INTEGRATION-PLAN.md` §1–§3, §4.3.
 
+> **Break-glass review, 2026-09-19.** `z.string().email()` at `src/admin-api/routes.ts:186` rejects the bare `vibe-breakglass`; admit
+> it as a literal. This product has **no recovery path at all** (no reset, no magic link), one bootstrapped admin, and a
+> console that requires `role === 'admin'`, so role sync demoting that admin locks the console out: add the last-admin guard
+> before turning `syncRoles` on. Sessions are in memory, so a break-glass session dies on restart. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts
 
 | Item | Anchor |

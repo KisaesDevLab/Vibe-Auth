@@ -4,6 +4,13 @@ Repo `Vibe-Time-Billing` · slug `vibe-time-billing` · Express 4 + **Redis sess
 
 Variant: **Express + server-side sessions** with a Redis store. Read `README.md` and `../INTEGRATION-PLAN.md` §1–§2, §4.1 first; this plan corrects and extends §4.1 with the 2026-09-17 survey.
 
+> **Break-glass review, 2026-09-19.** As written, break-glass **cannot sign in to this product at all.** The login regex requires a
+> dotted domain (`staff-routes.ts:80`), so the `vibe-breakglass@localhost` first written in step B was a 400 (corrected below). Beyond that, the second factor is
+> mandatory and fails closed, and an account with no enrolled factor is sent to a magic link, which needs SMTP and a real
+> mailbox — the outage break-glass exists for. Decide before building: exempt the break-glass account, or enrol its TOTP at
+> provisioning. Redis is also on the login path. JIT accounts can be reset from their mailbox (`/password/forgot`, magic link). Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts
 
 | Item | Anchor |
@@ -41,7 +48,7 @@ Variant: **Express + server-side sessions** with a Redis store. Read `README.md`
 
 **A.** `apps/api/package.json` dependency `^1.0.3`; `.npmrc` registry; `Dockerfile` BuildKit secret around `pnpm install` (TB `Dockerfile.server:9-17`). Migration `packages/db/migrations/<next>_vibe_auth.sql`: package SQL verbatim + `auth_sessions_oidc(sid, user_id, issuer, subject, idp_sid, created_at)` (the Redis store has no room for identity columns; this table maps identity → user for `destroyByIdentity`).
 
-**B.** `apps/api/src/lib/vibeAuthUsers.ts` (Drizzle over `app_user`): `findByUsername` maps `vibe-breakglass` → `vibe-breakglass@localhost`; `create` inserts `app_user` with `status ACTIVE`, null `password_hash` (magic-link-only users already exist that way), firm = the sole firm, and the mapped `user_role`; `setActive` flips `status`; audit sink → `emitAudit()` (`apps/api/src/auth/audit.ts:41`).
+**B.** `apps/api/src/lib/vibeAuthUsers.ts` (Drizzle over `app_user`): `findByUsername` maps `vibe-breakglass` → `vibe-breakglass@vibe-time-billing.local` (**not `@localhost`**: `EMAIL_RE` at `staff-routes.ts:80` requires a dotted domain; also admit the literal username in `LoginPasswordSchema`); `create` inserts `app_user` with `status ACTIVE`, null `password_hash` (magic-link-only users already exist that way), firm = the sole firm, and the mapped `user_role`; `setActive` flips `status`; audit sink → `emitAudit()` (`apps/api/src/auth/audit.ts:41`).
 
 **C.** `apps/api/src/lib/vibeAuth.ts`: `SessionAdapter.create` = `store.create(user)` + `writeSessionCookie` (`cookies.ts:39`) + csrf token, then insert `auth_sessions_oidc`; `destroy` = store destroy; `destroyByIdentity` = look up the table → `destroyAllForUser`; `currentUserId` from the resolved session. Engine: `createPgStores` on the pg pool, `secretWrap` via `packages/crypto` (`KMS_KEY` AES-GCM), `basePath: ""`, `trustProxy: true`, `syncRoles: true`.
 

@@ -4,6 +4,13 @@ Repo `vibe-entity` · slug `vibe-entity` · Express 4 + **Postgres sessions** (s
 
 Variant: **Express + server-side sessions**. Read `README.md`, `../INTEGRATION-PLAN.md` §1–§2, §4.6.
 
+> **Break-glass review, 2026-09-19.** `z.string().email()` at `routes/auth.ts:14` rejects `vibe-breakglass@localhost`.
+> **`passwordResetRequired` defaults true** in the column and in `createUser`, so `createLocalUser` must set it false or the
+> break-glass account arrives pre-armed for a forced change; `ensureAdminSeed` can re-arm it. Magic links give a JIT account a
+> full local session from its mailbox. `defaultRoleMapFor` sends `vibe-manager` to `viewer`: pass the map explicitly. Delete
+> the dormant bearer-only stub (`apps/api/src/auth.ts`) first — with `VIBE_APPLIANCE_OIDC_ISSUER` set it replaces cookie auth. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts
 
 | Item | Anchor |

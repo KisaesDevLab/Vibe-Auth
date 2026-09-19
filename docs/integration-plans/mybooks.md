@@ -4,6 +4,14 @@ Repo `myBooks` · slug `vibe-mybooks` · Express 4 + **stateless JWT** (HS256 ac
 
 Variant: **Express + stateless JWT → Trial Balance pattern**. Read `README.md`, `../INTEGRATION-PLAN.md` §1–§2, §4.2.
 
+> **Break-glass review, 2026-09-19.** zod `.email()` rejects `vibe-breakglass@localhost`. **Five failed attempts lock a non-super-admin
+> permanently** (`auth.service.ts:435,450-457`); the break-glass account is `owner`, not `is_super_admin`, and an
+> SSO-provisioned `owner` cannot unlock it either — create it so a lockout cannot be permanent. If 2FA is enabled with no
+> method the fallback is email OTP, unusable for a `.local` address. JIT accounts are resettable from their mailbox.
+> `defaultRoleMapFor` sends `vibe-manager` and `vibe-staff` to `readonly`: pass this plan's role map as an explicit `defaultRoleMap`. Verify the
+> break-glass command against `packages/api/Dockerfile`, which is what CI publishes, not the root Dockerfile. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts
 
 | Item | Anchor |

@@ -4,6 +4,13 @@ Repo `Vibe-Calculators` · slug `vibe-calculators` · Express 4 + **Postgres ses
 
 Variant: **Express + server-side sessions**. Read `README.md`, `../INTEGRATION-PLAN.md` §1–§2, §4.8.
 
+> **Break-glass review, 2026-09-19.** `z.string().email()` at `routes/auth.ts:41` rejects `vibe-breakglass@localhost`.
+> `mustChangePassword` is a hard gate in the SPA (`guards.tsx:27,48`): this plan clears it for JIT, and `createLocalUser` must
+> clear it for the break-glass row too, with `status: 'active'`. Magic links give a JIT account a session from its mailbox.
+> This is the one product hit by both CSP layers (Caddy and bare `helmet()`), so the package's inline-script test page will
+> not close its popup. Prefer an absolute module path in `breakglassCommand`, as the migration command already does. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts
 
 | Item | Anchor |

@@ -4,6 +4,12 @@ Repo `Vibe-Connect` · slug `vibe-connect` · Express 4 + **express-session (pg 
 
 Variant: **Express + server-side sessions**, replacing an existing OIDC route. Read `README.md`, `../INTEGRATION-PLAN.md` §1–§2, §4.11, and `COMPAT.md` D17.
 
+> **Break-glass review, 2026-09-19.** Best case of the nine: username login accepts `vibe-breakglass` natively, no MFA, no self-service
+> reset, no lockout. The risks are elsewhere: `validateIssuerUrl` rejects the Appliance's own `http://192.168.x.x` issuer
+> (this plan already says it is the first thing that fails), and `setRole` demoting `is_admin` on a single-admin install
+> needs the last-admin guard. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts
 
 | Item | Anchor |

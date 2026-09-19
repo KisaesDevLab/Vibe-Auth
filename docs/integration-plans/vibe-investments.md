@@ -4,6 +4,13 @@ Repo `Vibe-Investments` · slug `vibe-investments` (to be created) · Express 4 
 
 Variant: **Express + server-side sessions**. Read `README.md`, `../INTEGRATION-PLAN.md` §1–§2, §4.7. Half of this plan is appliance onboarding that SSO merely forces.
 
+> **Break-glass review, 2026-09-19.** `z.string().email()` at `routes/auth.ts:34` rejects `vibe-breakglass@localhost`.
+> `checkBruteForce` is awaited unguarded on the login path, so **a Redis outage takes break-glass down**: guard it for the
+> break-glass identifier. One seeded admin and no reset route means a role-sync demotion is recoverable only by SQL.
+> **`defaultRoleMapFor` sends `vibe-manager` and `vibe-staff` to `READ_ONLY`** (the vocabulary is uppercase): this plan's role
+> map must be passed as `defaultRoleMap`, not left to the default. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts
 
 | Item | Anchor |

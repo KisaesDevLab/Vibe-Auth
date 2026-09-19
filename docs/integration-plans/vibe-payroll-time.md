@@ -4,6 +4,13 @@ Repo `Vibe-Payroll-Time` · slug `vibe-payroll` · Express 4 + **stateless JWT**
 
 Variant: **Express + stateless JWT → Trial Balance pattern** (`sid` claim, `#sso_token` hand-off, revocation check on every request). Read `README.md` here and `../INTEGRATION-PLAN.md` §1–§2 first.
 
+> **Break-glass review, 2026-09-19.** zod `.email()` rejects the `vibe-breakglass@localhost` this plan hard-coded; it is corrected
+> below. **`defaultRoleMapFor` would promote every `vibe-partner` to `super_admin`** and send `vibe-manager` to `employee`: the
+> role map this plan prescribes must be passed as `defaultRoleMap`. Two mailbox-only paths (`magic/request`, `password-reset/request`) let a
+> JIT account bootstrap local credentials. The schema claims in step B were wrong and are corrected below; `password_hash` is
+> `varchar(72)`, which holds bcrypt and **not** argon2id. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts the plan is built on (survey 2026-09-17)
 
 | Item | Anchor |
@@ -40,7 +47,7 @@ Variant: **Express + stateless JWT → Trial Balance pattern** (`sid` claim, `#s
 - `backend/package.json`: `"@kisaesdevlab/vibe-auth": "^1.0.3"`; `backend/.npmrc` with `@kisaesdevlab:registry=https://npm.pkg.github.com`; `backend/Dockerfile` gets the BuildKit-secret `npm ci` from `trial-balance-app/Dockerfile.server:9-17` (the workspace `npm ci` at lines 20-24 is where the token is needed). `.github` publish workflow passes `NODE_AUTH_TOKEN`.
 - Migration `backend/migrations/2026MMDD000000_vibe_auth.js`: execute the package's `sql/auth_identities.sql` verbatim (copy TB's migration) and create `auth_sessions_oidc(sid text pk, user_id uuid, issuer text, subject text, idp_sid text, id_token text, created_at timestamptz)` with an index on `(user_id)` and `(issuer, subject)`.
 
-**B. User adapter** `backend/src/lib/vibeAuthUsers.ts` (copy `trial-balance-app/server/src/lib/vibeAuthUsers.ts`, swap to Knex + uuid + email). `findByUsername` maps `vibe-breakglass` → `vibe-breakglass@localhost`. `create` (JIT): insert `users` with an unusable argon2/bcrypt hash (whatever `services/auth` uses), `role_global` per the map, and the single company membership. `setActive`: the schema has no disabled flag in the survey; if confirmed, add `disabled_at timestamptz` in the same migration and honour it in `requireAuth`. Audit sink → the product's audit writer if one exists, else a `vibe_auth_audit` table (the survey found none; check `backend/src/services` for an audit module before inventing one).
+**B. User adapter** `backend/src/lib/vibeAuthUsers.ts` (copy `trial-balance-app/server/src/lib/vibeAuthUsers.ts`, swap to Knex + **bigint ids** + email — `users.id` is `bigIncrements`, not uuid, `20260420000002_users.js:10`). `findByUsername` maps `vibe-breakglass` → `vibe-breakglass@vibe-payroll.local` (**not `@localhost`**, which `shared/src/schemas/auth.ts:30` rejects; also admit the literal username in that schema). `create` (JIT): insert `users` with an unusable **bcrypt** hash (`password_hash` is `varchar(72)`; an argon2id string does not fit), `role_global` per the map, and the single company membership. `setActive`: **`disabled_at timestamptz` already exists** with a partial index (`20260420000002_users.js:23,26`); use it, add no column, and confirm `requireAuth` honours it. Audit sink → the product's audit writer if one exists, else a `vibe_auth_audit` table (the survey found none; check `backend/src/services` for an audit module before inventing one).
 
 **C. Session adapter + engine** `backend/src/lib/vibeAuth.ts` (copy TB's; the `vibeAuthMiddleware()` that rewrites the callback 302 to the fragment hand-off is the part to keep verbatim). `createPgStores({ query })` with a pg `Pool.query` (Knex: `knex.client.acquireConnection()` → `conn.query`, as TB does; `knex.raw` does not return rows in the shape the stores expect). `secretWrap` = the product's key-wrap; the survey found none, so use `ENCRYPTION_KEY`-style AES-GCM from `packages/shared` if present, otherwise add a 20-line `lib/secretWrap.ts` keyed from `JWT_SECRET` via HKDF (document in `docs/sso.md`). `basePath: ""`, `loginPath: "/login"`, `breakglassLoginPath: "/login/local"`, `trustProxy: true`, `syncRoles: true`.
 
@@ -49,7 +56,7 @@ Variant: **Express + stateless JWT → Trial Balance pattern** (`sid` claim, `#s
 **E. SPA** `frontend/src/pages/LoginPage.tsx`: wrap the form in `<LoginPanel basePath={import.meta.env.BASE_URL.replace(/\/$/, "")} returnTo="/">`; add route `/login/local` with `breakglass`. New `frontend/src/lib/ssoHandoff.ts` (copy `trial-balance-app/client/src/utils/loginFlow.ts`): on any route, read `#sso_token=…&sso_refresh=…`, write `vibept.session` via `auth-store.ts`, `history.replaceState` to drop the fragment. Sign-out: when the stored session is SSO-born, call `GET ${BASE_URL}auth/oidc/logout?local=1` then clear the store. Settings: `<AuthSettingsPage basePath productName="Payroll & Time" fetch={apiFetchWithBearer}>` behind `requireSuperAdmin` on the API and the super-admin nav on the SPA.
 
 **F. CLI + manifests**
-- `backend/src/vibeAuthAdapter.ts` default-exporting `{ users, audit, adminRole: "super_admin", breakglassEmail: "vibe-breakglass@localhost", close }`; `"vibeAuth": { "adapter": "./backend/src/vibeAuthAdapter.ts" }` in `backend/package.json`.
+- `backend/src/vibeAuthAdapter.ts` default-exporting `{ users, audit, adminRole: "super_admin", breakglassEmail: "vibe-breakglass@vibe-payroll.local", close }`; `"vibeAuth": { "adapter": "./backend/src/vibeAuthAdapter.ts" }` in `backend/package.json`.
 - **Rewrite** `.appliance/manifest.json` from `Vibe-Appliance/console/manifests/vibe-payroll.json` (ports 4000/8080, tsx migrate command), then add to both:
   ```jsonc
   "requires": ["identity"],

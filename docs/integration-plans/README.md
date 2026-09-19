@@ -39,6 +39,7 @@ These are not in `INTEGRATION-PLAN.md`; they were learned enabling Vibe Auth and
 | 1 | Time & Billing | `vibe-time-billing.md` | Express + Redis sessions, Tauri | 3–4 h | planned |
 | 2 | MyBooks | `mybooks.md` | Express + JWT | 3 h | planned |
 | 3 | AI Router | `vibe-ai-router.md` | Fastify + memory sessions | 2 h | planned |
+| — | **all products** | `break-glass-and-rollout-risks.md` | — | read first | cross-product register: how break-glass behaves in every product, and the Appliance risks that grow with each SSO product (2026-09-19) |
 | 4 | Tax Research Chat | `vibe-tax-research-chat.md` | Express + JWT | 2–3 h | implemented on branch `feat/sso-vibe-auth` (`05def3e`, `57dc67e`); not merged, no pull request yet |
 | 5 | 1099 | `vibe-1099.md` | Express + Redis sessions | 2 h | planned |
 | 6 | Entity | `vibe-entity.md` | Express + Postgres sessions | 2 h | planned |

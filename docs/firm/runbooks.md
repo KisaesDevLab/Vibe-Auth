@@ -10,6 +10,8 @@ Audit: `vibe.auth.settings.changed { what: "mfa_reset" }`.
 ## R2. Single sign-on is down; staff must work
 Products in `both` mode keep working with passwords; nothing to do.
 Products in `oidc_only` mode: open the product's `/login/local` page and sign in as `vibe-breakglass` with the password from `sudo vibe credentials` (section "Vibe Auth break-glass local admins"). Every use is logged (`vibe.auth.breakglass.used`) and Sentinel raises `SENT-V-AUTH-001`.
+Two products differ. **Vibe 1099** signs people in by email and rejects the bare username: sign in as `vibe-breakglass@vibe-1099.local`. **Vibe 1040** requires a second factor even for this account: it must be signed in once and its authenticator app enrolled **when the account is provisioned**, not during the outage; keep that authenticator with the password.
+**Test the break-glass sign-in after provisioning and after any product database restore or rollback.** The console's "break-glass ready" pill only means a password is stored; it does not mean the account exists or that the password still matches. If the password is refused: `sudo vibe identity rotate-breakglass <slug>`. If the account is gone: `sudo vibe identity register <slug>`.
 When the outage is over, rotate the break-glass password: `sudo vibe identity rotate-breakglass <slug>`.
 
 ## R3. Diagnose "Identity provider unavailable"

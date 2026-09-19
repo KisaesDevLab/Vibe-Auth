@@ -4,6 +4,12 @@ Repo `Vibe-Recap` · slug `vibe-recap` · **Fastify 5** · Postgres sessions (`r
 
 Variant: **Fastify**. Read `README.md`, `../INTEGRATION-PLAN.md` §1–§3, §4.10.
 
+> **Break-glass review, 2026-09-19.** The identifier is fine here (`z.string().max(200)`, no `.email()`) and there is no MFA. Two things
+> are not: the command path in item 7 was wrong and is corrected below, and `forgot-password` lets a JIT account bootstrap
+> local credentials from its mailbox whenever SMTP is on. `createLocalUser` must clear `mustChangePassword` for the
+> break-glass row as this plan already does for JIT. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
+> `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
+
 ## 0. Facts
 
 | Item | Anchor |
@@ -27,7 +33,7 @@ Variant: **Fastify**. Read `README.md`, `../INTEGRATION-PLAN.md` §1–§3, §4.
 4. **Roles.** Package vocabulary most-privileged-first `["admin","preparer","staff","viewer"]`, `adminRole: "admin"`; map `vibe-admin`/`vibe-it`/`vibe-partner` → `admin`, `vibe-manager` → `preparer`, `vibe-staff` → `staff`. `setActive` flips `disabled`. JIT: `must_change_password: false` (I7).
 5. **Setup gate.** `POST /api/setup` self-disables once a user exists; JIT creation through SSO counts. Document that a fresh install can be bootstrapped either way; in `oidc_only` the setup route is refused (local credential).
 6. **zod 4 vs the package's zod 3:** separate copies, no conflict (verified in §4.10).
-7. **Break-glass:** the entrypoint dispatches subcommands; add `breakglass` to `docker-entrypoint.sh:12-17` mapping to `node node_modules/@kisaesdevlab/vibe-auth/dist/cli.js breakglass "$@"`, and set `breakglassCommand: ["docker-entrypoint.sh","breakglass","ensure","--json"]` (consistent with the manifest's `seed.command`). Adapter `apps/api/dist/vibeAuthAdapter.js`; `"vibeAuth": { "adapter": "./dist/vibeAuthAdapter.js" }`.
+7. **Break-glass:** the entrypoint dispatches subcommands; add `breakglass` to `docker-entrypoint.sh:12-17` mapping to `node /app/node_modules/@kisaesdevlab/vibe-auth/dist/cli.js breakglass "$@"` (**absolute**: the entrypoint does `cd /app/apps/api` at `docker-entrypoint.sh:11` and the image has modules only at `/app/node_modules`, so the relative path first written here did not exist; that working directory is the right one for the CLI's `package.json` lookup), and set `breakglassCommand: ["docker-entrypoint.sh","breakglass","ensure","--json"]` (consistent with the manifest's `seed.command`). Adapter `apps/api/dist/vibeAuthAdapter.js`; `"vibeAuth": { "adapter": "./dist/vibeAuthAdapter.js" }`.
 8. **Standalone installs** register by hand (`docs/sso.md`).
 
 ## 2. Steps
