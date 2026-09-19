@@ -13,6 +13,9 @@
  *   5. assert session, role mapping, /auth/me
  *   6. back-channel logout: end the authentik session → ref-app session gone
  *   7. second login answers the TOTP challenge with the enrolled secret
+ *   7b. MFA enforcement off: a user without a device signs in without a code (no lockout)
+ *   7c. per-product access: restrict ref-app, a user who is not ticked is stopped at authentik's
+ *       authorize endpoint, a ticked user still signs in, verify flags hand-deleted bindings, reopen
  *   8. rotate secret, verify, rebase, delete
  * Runs on the host; talks to http://localhost:18080 (Caddy) and to docker compose for restarts.
  */
@@ -124,13 +127,12 @@ async function follow(url, jar, maxHops = 12) {
  * Drive authentik flows through the executor API until the browser would leave authentik.
  * Handles: identification(+password), MFA enrolment (TOTP), MFA validation (TOTP), consent, user-login.
  */
-const alicePw = { username: "alice", password: "Alice-Password-12345" };
-let user = alicePw;
-let totpSecret = null;
+const user = { username: "alice", password: "Alice-Password-12345", totpSecret: null };
+const bob = { username: "bob", password: "Bob-Password-1234567", totpSecret: null };
 /** MFA codes answered at an authenticator-validate stage during the last runThroughAuthentik. */
 let validateSubmits = 0;
-async function runThroughAuthentik(startUrl, jar, as = alicePw) {
-  user = as;
+/** Each person carries their own TOTP secret (set when they enrol during a run). */
+async function runThroughAuthentik(startUrl, jar, who = user) {
   validateSubmits = 0;
   let current = await follow(startUrl, jar);
   for (let round = 0; round < 6; round++) {
@@ -174,15 +176,15 @@ async function runThroughAuthentik(startUrl, jar, as = alicePw) {
     let to = null;
     for (let step = 0; step < 15; step++) {
       const comp = ch.body.component;
-      if (comp === "ak-stage-identification") ch = await execJson({ component: comp, uid_field: user.username, password: user.password });
-      else if (comp === "ak-stage-password") ch = await execJson({ component: comp, password: user.password });
+      if (comp === "ak-stage-identification") ch = await execJson({ component: comp, uid_field: who.username, password: who.password });
+      else if (comp === "ak-stage-password") ch = await execJson({ component: comp, password: who.password });
       else if (comp === "ak-stage-authenticator-validate") {
         const devices = ch.body.device_challenges ?? [];
         const totpDev = devices.find((d) => d.device_class === "totp");
-        if (totpDev && totpSecret) {
+        if (totpDev && who.totpSecret) {
           await freshTotpWindow();
           validateSubmits++;
-          ch = await execJson({ component: comp, code: totp(totpSecret), selected_challenge: totpDev });
+          ch = await execJson({ component: comp, code: totp(who.totpSecret), selected_challenge: totpDev });
         } else if ((ch.body.configuration_stages ?? []).length) {
           const cfg = ch.body.configuration_stages.find((s) => /totp/i.test(s.name)) ?? ch.body.configuration_stages[0];
           check("MFA enforced: enrolment offered to a user without a device", true, cfg.name);
@@ -195,7 +197,7 @@ async function runThroughAuthentik(startUrl, jar, as = alicePw) {
         const url = ch.body.config_url ?? "";
         const secret = /[?&]secret=([A-Z2-7]+)/i.exec(url)?.[1];
         check("TOTP enrolment challenge carries a secret", !!secret);
-        totpSecret = secret;
+        who.totpSecret = secret;
         await freshTotpWindow();
         ch = await execJson({ component: comp, code: totp(secret) });
       } else if (comp === "ak-stage-authenticator-static") ch = await execJson({ component: comp });
@@ -304,15 +306,15 @@ async function main() {
   } else {
     alice = (await json(`${AK}/api/v3/core/users/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ username: "alice", name: "Alice Partner", email: "alice@kisaes.com", is_active: true, groups: [partner.pk], path: "users" }) })).body;
   }
-  await json(`${AK}/api/v3/core/users/${alice.pk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: alicePw.password }) });
-  totpSecret = null;
+  await json(`${AK}/api/v3/core/users/${alice.pk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: user.password }) });
+  user.totpSecret = null;
 
   // 4. first login: password + MFA enrolment + authorization → callback
   const jar = new Jar();
   const first = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jar);
   check("first login (MFA enrolment) satisfies an MFA-requiring product: amr carries mfa", !/Multi-factor authentication is required/.test(first.body ?? ""), `${first.res.status} ${first.url}`);
   check("first login lands on the product after the callback", new URL(first.url).pathname === "/ref/api/me" && first.res.status === 200, `${first.res.status} ${first.url}`);
-  check("TOTP was enrolled during login (MFA enforced)", !!totpSecret);
+  check("TOTP was enrolled during login (MFA enforced)", !!user.totpSecret);
   check("first login asks for one code after enrolment (the confirmation of the new device)", validateSubmits === 1, `codes answered: ${validateSubmits}`);
   const me = await json(`${APP}/api/me`, { headers: { cookie: jar.header() } });
   check("ref-app /api/me returns the JIT-provisioned user", me.status === 200 && me.body.user?.email === "alice@kisaes.com", JSON.stringify(me.body).slice(0, 200));
@@ -351,31 +353,72 @@ async function main() {
   // validation stage): a user with no device signs in without being asked for a code, so the
   // post-enrolment confirmation stage can never lock anyone out. The ref-app still requires amr
   // mfa, so it refuses the login with its MFA page — that page proves authentik let the user through.
+  const resetDevices = async (pk) => {
+    for (const d of (await json(`${AK}/api/v3/authenticators/admin/all/?user=${pk}`, { headers: akHeaders })).body ?? []) {
+      const kind = /totp/i.test(d.type) ? "totp" : /static/i.test(d.type) ? "static" : null;
+      if (kind) await fetch(`${AK}/api/v3/authenticators/admin/${kind}/${d.pk}/`, { method: "DELETE", headers: akHeaders });
+    }
+  };
+  let bobUser = (await json(`${AK}/api/v3/core/users/?username=bob`, { headers: akHeaders })).body.results?.find((u) => u.username === "bob");
+  if (bobUser) await resetDevices(bobUser.pk);
+  else bobUser = (await json(`${AK}/api/v3/core/users/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ username: "bob", name: "Bob Partner", email: "bob@kisaes.com", is_active: true, groups: [partner.pk], path: "users" }) })).body;
+  await json(`${AK}/api/v3/core/users/${bobUser.pk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: bob.password }) });
+  bob.totpSecret = null;
   const mfaStage = (await json(`${AK}/api/v3/stages/authenticator/validate/?name=vibe-mfa-validation`, { headers: akHeaders })).body.results?.[0];
   check("MFA validation stage found", !!mfaStage);
   await json(`${AK}/api/v3/stages/authenticator/validate/${mfaStage.pk}/`, { method: "PATCH", headers: akHeaders, body: JSON.stringify({ not_configured_action: "skip" }) });
   try {
-    const bobPw = { username: "bob", password: "Bob-Password-12345" };
-    let bob = (await json(`${AK}/api/v3/core/users/?username=bob`, { headers: akHeaders })).body.results?.find((u) => u.username === "bob");
-    if (bob) {
-      for (const d of (await json(`${AK}/api/v3/authenticators/admin/all/?user=${bob.pk}`, { headers: akHeaders })).body ?? []) {
-        const kind = /totp/i.test(d.type) ? "totp" : /static/i.test(d.type) ? "static" : null;
-        if (kind) await fetch(`${AK}/api/v3/authenticators/admin/${kind}/${d.pk}/`, { method: "DELETE", headers: akHeaders });
-      }
-    } else {
-      bob = (await json(`${AK}/api/v3/core/users/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ username: "bob", name: "Bob Staff", email: "bob@kisaes.com", is_active: true, groups: [partner.pk], path: "users" }) })).body;
-    }
-    await json(`${AK}/api/v3/core/users/${bob.pk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: bobPw.password }) });
-    const aliceSecret = totpSecret;
-    totpSecret = null;
-    const b = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, new Jar(), bobPw);
-    const enrolled = !!totpSecret;
-    totpSecret = aliceSecret;
+    const b = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, new Jar(), bob);
+    const enrolled = !!bob.totpSecret;
     check("enforcement off: a user without a device is neither enrolled nor asked for a code", !enrolled && validateSubmits === 0, `enrolled=${enrolled} codes=${validateSubmits}`);
     check("enforcement off: authentik completes the sign-in (the MFA-requiring product then refuses it)", new URL(b.url).pathname === "/ref/auth/oidc/callback" && /Multi-factor authentication is required/.test(b.body ?? ""), `${b.res.status} ${b.url}`);
   } finally {
-    await json(`${AK}/api/v3/stages/authenticator/validate/${mfaStage.pk}/`, { method: "PATCH", headers: akHeaders, body: JSON.stringify({ not_configured_action: "configure" }) });
+    // authentik validates a PATCH on its own: "configure" is rejected unless configuration_stages is sent with it.
+    const restored = await json(`${AK}/api/v3/stages/authenticator/validate/${mfaStage.pk}/`, { method: "PATCH", headers: akHeaders, body: JSON.stringify({ not_configured_action: "configure", configuration_stages: mfaStage.configuration_stages }) });
+    check("MFA enforcement restored after the enforcement-off check", restored.status === 200 && restored.body.not_configured_action === "configure", JSON.stringify(restored.body).slice(0, 200));
   }
+
+  // 7c. per-product access: a restricted product admits only its ticked users (and vibe-admin)
+  await resetDevices(bobUser.pk);
+  bob.totpSecret = null;
+  const accessOf = async (pk) => (await json(`${AK}/api/v3/core/applications/ref-app/check_access/?for_user=${pk}`, { headers: akHeaders })).body?.passing;
+  check("open product: authentik admits a user nobody ticked", (await accessOf(bobUser.pk)) === true);
+
+  const restrict = await json(`${BROKER}/registrations/ref-app/access`, { method: "PUT", headers: consoleHeaders, body: JSON.stringify({ restricted: true, seed: "none" }) });
+  check("PUT access restricted:true", restrict.status === 200 && restrict.body.restricted === true, JSON.stringify(restrict.body));
+  const appGroup = (await json(`${AK}/api/v3/core/groups/?name=vibe-app-ref-app`, { headers: akHeaders })).body.results?.find((g) => g.name === "vibe-app-ref-app");
+  check("broker created the product access group", !!appGroup);
+  const refApp = (await json(`${AK}/api/v3/core/applications/ref-app/`, { headers: akHeaders })).body;
+  const bound = (await json(`${AK}/api/v3/policies/bindings/?target=${refApp.pk}`, { headers: akHeaders })).body.results ?? [];
+  check("application is bound to the access group and vibe-admin", bound.length === 2 && bound.every((b) => b.group && !b.policy && !b.user) && bound.some((b) => b.group === appGroup?.pk), JSON.stringify(bound.map((b) => b.group_obj?.name ?? b.group)));
+  await json(`${AK}/api/v3/core/groups/${appGroup.pk}/add_user/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ pk: alice.pk }) });
+  check("restricted: authentik denies bob", (await accessOf(bobUser.pk)) === false);
+  check("restricted: authentik admits alice (ticked)", (await accessOf(alice.pk)) === true);
+
+  const jarBob = new Jar();
+  const denied = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jarBob, bob);
+  const deniedPath = new URL(denied.url).pathname;
+  check("bob is stopped at authentik's authorize endpoint, never reaching the product", /\/application\/o\/authorize\//.test(deniedPath) && !deniedPath.startsWith("/ref/"), `${denied.res.status} ${denied.url.slice(0, 120)}`);
+  check("bob sees authentik's permission-denied page", /permission denied|request has been denied|access denied/i.test(denied.body), denied.body.replace(/\s+/g, " ").slice(0, 200));
+  check("bob has no product session", (await json(`${APP}/api/me`, { headers: { cookie: jarBob.header() } })).status === 401);
+
+  const jarAlice = new Jar();
+  const allowed = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jarAlice, user);
+  check("alice (ticked) still signs in to the restricted product", new URL(allowed.url).pathname === "/ref/api/me" && allowed.res.status === 200, `${allowed.res.status} ${allowed.url}`);
+  const verRestricted = await json(`${BROKER}/registrations/verify`, { headers: consoleHeaders });
+  check("verify is clean while restricted", verRestricted.body.find?.((r) => r.slug === "ref-app")?.ok === true, JSON.stringify(verRestricted.body).slice(0, 300));
+  for (const b of bound) await fetch(`${AK}/api/v3/policies/bindings/${b.pk}/`, { method: "DELETE", headers: akHeaders });
+  const verDrift = await json(`${BROKER}/registrations/verify`, { headers: consoleHeaders });
+  check("verify flags bindings deleted by hand (fail-open drift)", (verDrift.body.find?.((r) => r.slug === "ref-app")?.problems ?? []).some((p) => /no binding for/.test(p)), JSON.stringify(verDrift.body).slice(0, 300));
+
+  const open = await json(`${BROKER}/registrations/ref-app/access`, { method: "PUT", headers: consoleHeaders, body: JSON.stringify({ restricted: false }) });
+  check("PUT access restricted:false", open.status === 200 && open.body.restricted === false);
+  check("opened: authentik admits bob again", (await accessOf(bobUser.pk)) === true);
+  const stillMember = (await json(`${AK}/api/v3/core/users/${alice.pk}/`, { headers: akHeaders })).body.groups_obj?.some((g) => g.name === "vibe-app-ref-app");
+  check("opening keeps the ticked list for later", stillMember === true);
+  const jarBob2 = new Jar();
+  const bobIn = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jarBob2, bob);
+  check("bob signs in once the product is open again", new URL(bobIn.url).pathname === "/ref/api/me" && bobIn.res.status === 200, `${bobIn.res.status} ${bobIn.url}`);
 
   // 8. rotate + verify + rebase + delete
   const rot = await json(`${BROKER}/registrations/ref-app/rotate`, { method: "POST", headers: consoleHeaders });

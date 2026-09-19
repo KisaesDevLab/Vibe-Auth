@@ -29,9 +29,11 @@ entries:
       show_matched_user: false
       pretend_user_exists: true
       show_source_labels: false
+  # state: created — the broker patches this stage with admin-entered SMTP settings
+  # (use_global_settings=false); the hourly reconcile must not revert them.
   - model: authentik_stages_email.emailstage
     id: recovery-email
-    state: present
+    state: created
     identifiers: { name: vibe-recovery-email }
     attrs:
       use_global_settings: true

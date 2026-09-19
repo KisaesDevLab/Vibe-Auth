@@ -14,9 +14,12 @@ Vibe Auth gives every member of the firm one sign-in for every Vibe product. It 
    | `vibe-partner` | partner / owner |
    | `vibe-manager` | manager / reviewer |
    | `vibe-staff` | staff / preparer |
-   | `vibe-it` | Vibe Auth administration only, no product access |
-   New users receive a password-reset link (the recovery flow) — no passwords are sent by email.
-5. **Switch each product to single sign-on.** Console → Identity → the product → mode:
+   | `vibe-it` | IT administrators: Vibe Auth administration. Note: today this group is also mapped to the administrator role inside each product; to keep IT staff out of a product, restrict that product (below) and do not tick them. |
+   New users receive a set-password email (the recovery flow) when outbound email is configured; either way the console shows a one-time link you can hand over in person or by chat. No passwords are ever sent by email.
+   **Set up outbound email** (Vibe Auth → Email, or the optional section of the setup wizard): enter your mail server (Microsoft 365: `smtp.office365.com`, port 587, STARTTLS, a mailbox with "Authenticated SMTP" on; Google Workspace: `smtp.gmail.com`, port 587, an app password) and click "Send me a test email". Until this is done, staff cannot use "Forgot password?" on the sign-in page and must ask an administrator for a reset link (Users → "Reset link").
+5. **Choose who can use each product (optional).** By default every person in Vibe Auth can sign in to every product. To limit one: Vibe Auth → Products → **Restrict**, then tick people in the **Apps** column on the Users page. `vibe-admin` members can always sign in everywhere. A person who is not ticked sees "Permission denied" when they try, and the product disappears from their app list. Unticking someone signs them out of all products at once; they sign back in to the ones they still have. "Open to everyone" reverses it and keeps your ticked list for later.
+   This controls single sign-on only. While a product is in `both` mode, someone who still has a local password for that product can use it; switch the product to `oidc_only` when you need the restriction to be complete.
+6. **Switch each product to single sign-on.** Console → Identity → the product → mode:
    - `local` (default): password sign-in only, exactly as before.
    - `both`: password sign-in and a "Sign in with <firm>" button.
    - `oidc_only`: single sign-on only. Only the `vibe-breakglass` emergency account can still use a password (see Runbooks).

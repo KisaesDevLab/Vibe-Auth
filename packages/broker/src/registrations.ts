@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
+import type { AppAccess } from "./access.js";
 import type { Authentik, AkOAuth2Provider } from "./authentik.js";
 import { AuthentikError } from "./authentik.js";
 import type { BootstrapResult } from "./bootstrap.js";
@@ -81,6 +82,8 @@ export class Registrations {
     private ak: Authentik,
     private db: Db,
     private boot: () => BootstrapResult,
+    /** Per-product sign-in restrictions; re-applied on every upsert because a re-created application has no bindings. */
+    private access?: Pick<AppAccess, "sync" | "problems">,
   ) {}
 
   issuerFor(slug: string): string {
@@ -190,6 +193,8 @@ export class Registrations {
     // sibling application "<slug>-edge". Caddy's forward_auth (rendered by the Appliance
     // only when sso.edgeGate is true) asks the outpost, which matches on external_host.
     await this.syncEdgeGate(reg);
+    // Who may sign in (after the edge gate, whose sibling application carries the same bindings).
+    await this.access?.sync(reg);
 
     await this.db.query(
       `INSERT INTO vibe_broker_registrations (slug, display_name, base_url, internal_url, client_id, client_secret_enc, redirect_paths, logout_paths, public_paths, edge_gate, provider_pk, application_slug, status, updated_at)
@@ -299,6 +304,7 @@ export class Registrations {
       } catch (err) {
         problems.push(`discovery failed: ${(err as Error).message}`);
       }
+      if (this.access) problems.push(...(await this.access.problems(reg).catch((e: Error) => [`access check failed: ${e.message}`])));
       results.push({ slug: reg.slug, ok: problems.length === 0, problems, issuer });
     }
     return results;

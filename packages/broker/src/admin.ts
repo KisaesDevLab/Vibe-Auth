@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Request, Response, Router } from "express";
 import express from "express";
 import { createVibeAuth, createPgStores, vibeAuthExpress, type SessionAdapter, type SessionIdentity, type UserAdapter, type VibeUser } from "@kisaesdevlab/vibe-auth";
+import type { AppAccess } from "./access.js";
 import type { Authentik } from "./authentik.js";
 import { AuthentikError } from "./authentik.js";
 import type { BootstrapResult } from "./bootstrap.js";
@@ -9,6 +10,8 @@ import { ADMIN_APP_SLUG, setMfaRequired, VIBE_GROUPS } from "./bootstrap.js";
 import type { BrokerConfig } from "./config.js";
 import type { Db, Row } from "./db.js";
 import type { BrokerAudit } from "./audit.js";
+import { emailSettingsInput, RECOVERY_EMAIL_STAGE, type EmailConfig } from "./email.js";
+import { SmtpError } from "./smtp.js";
 import type { Registrations } from "./registrations.js";
 import type { Setup } from "./setup.js";
 import type { Logger } from "./log.js";
@@ -27,6 +30,8 @@ export interface AdminDeps {
   regs: Registrations;
   audit: BrokerAudit;
   setup: Setup;
+  email: EmailConfig;
+  access: AppAccess;
   log: Logger;
 }
 
@@ -158,8 +163,9 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
 
   api.get("/overview", async (_req, res) => {
     const c = d.cfg();
-    const [users, regs, setup, version] = await Promise.all([d.ak.users({ is_active: true }), d.regs.list(), d.setup.state(), d.ak.version().catch(() => null)]);
+    const [users, regs, setup, version, email] = await Promise.all([d.ak.users({ is_active: true }), d.regs.list(), d.setup.state(), d.ak.version().catch(() => null), d.email.status()]);
     res.json({
+      email,
       brand: c.VIBE_AUTH_BRAND_NAME,
       firm: (await d.db.getState<{ name: string }>("firm"))?.name,
       routing: { mode: c.VIBE_AUTH_ROUTING, host: c.VIBE_AUTH_HOST, publicBase: c.authentikPublicBase, internalBase: c.authentikInternalBase },
@@ -189,7 +195,7 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
       if (want.has(g) && !before.has(g)) await d.ak.addUserToGroup(pkG, pk);
       if (!want.has(g) && before.has(g)) await d.ak.removeUserFromGroup(pkG, pk);
     }
-    d.audit.emit({ type: "vibe.auth.role.changed", at: new Date().toISOString(), user_id: pk, from: [...before].filter((g) => g.startsWith("vibe-")), to: [...want], source: "admin", actor: actor(req) });
+    d.audit.emit({ type: "vibe.auth.role.changed", at: new Date().toISOString(), user_id: pk, from: [...before].filter((g) => (VIBE_GROUPS as readonly string[]).includes(g)), to: [...want], source: "admin", actor: actor(req) });
     res.json({ ok: true });
   });
   api.post("/users/:pk/mfa-reset", async (req, res) => {
@@ -212,15 +218,121 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
     res.json({ ok: true, ended: n });
   });
   api.post("/users", async (req, res) => {
-    const b = req.body as { email?: string; name?: string; groups?: string[] };
+    const b = req.body as { email?: string; name?: string; groups?: string[]; apps?: string[] };
     if (!b.email || !b.name) return res.status(400).json({ error: "email and name required" });
     const groups = (b.groups ?? ["vibe-staff"]).filter((g) => (VIBE_GROUPS as readonly string[]).includes(g)).map((g) => d.boot().groups[g]!);
     try {
       const u = await d.ak.createUser({ username: b.email.toLowerCase(), name: b.name, email: b.email, is_active: true, groups, path: "users" });
       d.audit.emit({ type: "vibe.auth.user.provisioned", at: new Date().toISOString(), user_id: u.pk, issuer: d.cfg().authentikPublicBase, sub: u.uuid, email: b.email, role: b.groups ?? ["vibe-staff"], actor: actor(req) });
-      res.json({ ok: true, pk: u.pk, recoveryUrl: `${d.cfg().authentikPublicBase}/if/flow/vibe-recovery/` });
+      if (b.apps?.length) await d.access.setUserApps(u.pk, b.apps, (await d.regs.list()).map((r) => r.slug)).catch((e: Error) => d.log.warn("could not assign apps to new user", { user: u.pk, error: e.message }));
+      // Hand the admin a way to get the person their first password: email when we can, a link always.
+      const emailed = await sendRecoveryEmail(u.pk).then(() => true).catch((e: Error) => (d.log.warn("recovery email not sent", { user: u.pk, error: e.message }), false));
+      const recoveryLink = await d.ak.createRecoveryLink(u.pk).catch((e: Error) => (d.log.warn("recovery link not created", { user: u.pk, error: e.message }), null));
+      if (emailed) d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "recovery_email_sent", user_id: u.pk, actor: actor(req) });
+      if (recoveryLink) d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "recovery_link_created", user_id: u.pk, actor: actor(req) });
+      res.json({ ok: true, pk: u.pk, emailed, recoveryLink, recoveryUrl: `${d.cfg().authentikPublicBase}/if/flow/vibe-recovery/` });
     } catch (e) {
       res.status(e instanceof AuthentikError ? e.status : 500).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
+    }
+  });
+
+  /** Throws when no outbound mail exists or the user has no address; authentik queues the send. */
+  async function sendRecoveryEmail(pk: number): Promise<void> {
+    const status = await d.email.status();
+    if (!status.configured) throw new Error("no outbound email is configured (Admin → Email)");
+    const stage = await d.ak.emailStageByName(RECOVERY_EMAIL_STAGE);
+    if (!stage) throw new Error(`recovery email stage "${RECOVERY_EMAIL_STAGE}" not found`);
+    await d.ak.sendRecoveryEmail(pk, stage.pk);
+  }
+  // Password reset on behalf of a user. The link is shown to the admin once and never logged.
+  api.post("/users/:pk/recovery-link", async (req, res) => {
+    const pk = Number(req.params.pk);
+    try {
+      const link = await d.ak.createRecoveryLink(pk);
+      d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "recovery_link_created", user_id: pk, actor: actor(req) });
+      res.json({ ok: true, link });
+    } catch (e) {
+      res.status(e instanceof AuthentikError ? e.status : 500).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
+    }
+  });
+  api.post("/users/:pk/recovery-email", async (req, res) => {
+    const pk = Number(req.params.pk);
+    try {
+      const u = await d.ak.user(pk);
+      if (!u.email) return res.status(400).json({ error: "user has no email address" });
+      await sendRecoveryEmail(pk);
+      d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "recovery_email_sent", user_id: pk, actor: actor(req) });
+      res.json({ ok: true, to: u.email });
+    } catch (e) {
+      res.status(e instanceof AuthentikError ? e.status : 400).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
+    }
+  });
+
+  // Which products each user may sign in to (see access.ts). Open products admit everyone.
+  api.get("/access", async (_req, res) => res.json(await d.access.matrix(await d.regs.list())));
+  api.put("/registrations/:slug/access", async (req, res) => {
+    const b = req.body as { restricted?: boolean; seed?: "everyone" | "none" };
+    if (typeof b.restricted !== "boolean") return res.status(400).json({ error: "restricted (boolean) required" });
+    if (req.params.slug === ADMIN_APP_SLUG) return res.status(400).json({ error: "the admin console cannot be restricted" });
+    const reg = await d.regs.get(req.params.slug);
+    if (!reg) return res.status(404).json({ error: "not_found" });
+    try {
+      const r = await d.access.set(reg, b.restricted, actor(req), b.seed === "everyone" ? "everyone" : "none");
+      d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: b.restricted ? "app_access_restricted" : "app_access_opened", slug: reg.slug, seeded: r.seeded, actor: actor(req) });
+      res.json({ ok: true, restricted: b.restricted, seeded: r.seeded });
+    } catch (e) {
+      res.status(e instanceof AuthentikError ? e.status : 500).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
+    }
+  });
+  api.delete("/access/:slug", async (req, res) => {
+    if (await d.regs.get(req.params.slug)) return res.status(400).json({ error: "product is still registered; open it instead" });
+    await d.access.forget(req.params.slug);
+    d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "app_access_forgotten", slug: req.params.slug, actor: actor(req) });
+    res.json({ ok: true });
+  });
+  api.put("/users/:pk/apps", async (req, res) => {
+    const pk = Number(req.params.pk);
+    const apps = (req.body as { apps?: unknown }).apps;
+    if (!Array.isArray(apps) || apps.some((a) => typeof a !== "string")) return res.status(400).json({ error: "apps (string[]) required" });
+    try {
+      const r = await d.access.setUserApps(pk, apps as string[], (await d.regs.list()).map((x) => x.slug));
+      // Losing a restricted product must take effect now: ending the authentik sessions fires
+      // back-channel logout in every product; the user signs back in to what they still have.
+      const sessionsEnded = r.revoked.length ? await d.ak.endUserSessions(pk).catch(() => 0) : 0;
+      if (r.added.length || r.removed.length) d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "user_apps_changed", user_id: pk, added: r.added, removed: r.removed, sessions_ended: sessionsEnded, actor: actor(req) });
+      res.json({ ok: true, ...r, sessionsEnded });
+    } catch (e) {
+      res.status(e instanceof AuthentikError ? e.status : 500).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
+    }
+  });
+
+  // Outbound email (SMTP) for the recovery flow.
+  api.get("/email", async (_req, res) => res.json(await d.email.status()));
+  api.put("/email", async (req, res) => {
+    const parsed = emailSettingsInput.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") });
+    try {
+      const applied = await d.email.save(parsed.data, actor(req));
+      d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "email_updated", host: parsed.data.host, port: parsed.data.port, security: parsed.data.security, actor: actor(req) });
+      res.json({ ok: true, applied, status: await d.email.status() });
+    } catch (e) {
+      res.status(e instanceof AuthentikError ? e.status : 500).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
+    }
+  });
+  api.delete("/email", async (req, res) => {
+    const applied = await d.email.clear();
+    d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "email_cleared", actor: actor(req) });
+    res.json({ ok: true, applied, status: await d.email.status() });
+  });
+  api.post("/email/test", async (req, res) => {
+    const to = String((req.body as { to?: string }).to ?? "").trim() || actor(req);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: "to must be an email address" });
+    try {
+      const r = await d.email.sendTest(to, d.cfg().VIBE_AUTH_BRAND_NAME);
+      d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "email_test_sent", to, source: r.source, actor: actor(req) });
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      res.status(e instanceof SmtpError ? 502 : 400).json({ error: (e as Error).message });
     }
   });
 
@@ -304,6 +416,12 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
     res.json({ ok: true, applied, required });
   });
 
+  // An install that configured a source before v1.0.5 has the older mapping expression; repair it in place.
+  void d.ak
+    .sourcePropertyMappings()
+    .then((all) => (all.some((m) => m.name === SOURCE_MAPPING_NAME) ? ensureSourceGroupMapping(d.ak) : undefined))
+    .catch((e: Error) => d.log.warn("could not check the source group mapping", { error: e.message }));
+
   router.use(`${cfg.VIBE_AUTH_BASE_PATH}/api/admin`, express.json(), api);
   return { router, ready: () => auth.start() };
 }
@@ -318,13 +436,19 @@ except NameError:
     claims = data
 claims = claims or {}
 names = list(claims.get("roles") or []) + list(claims.get("groups") or [])
-return {"groups": [n for n in names if isinstance(n, str) and n.startswith("vibe-")]}
+# Role groups only. Per-product access groups ("vibe-app-*") are managed in the Vibe Auth console:
+# if the identity provider ever sent one, authentik would link that group to this source and strip
+# it from every other federated user at their next sign-in.
+return {"groups": [n for n in names if isinstance(n, str) and n.startswith("vibe-") and not n.startswith("vibe-app-")]}
 `;
 
 async function ensureSourceGroupMapping(ak: Authentik): Promise<string> {
   const all = await ak.sourcePropertyMappings();
   const found = all.find((m) => m.name === SOURCE_MAPPING_NAME);
-  if (found) return found.pk;
+  if (found) {
+    if (found.expression !== SOURCE_GROUP_EXPRESSION) await ak.updateSourcePropertyMapping(found.pk, { expression: SOURCE_GROUP_EXPRESSION });
+    return found.pk;
+  }
   const created = await ak.createSourcePropertyMapping({ name: SOURCE_MAPPING_NAME, expression: SOURCE_GROUP_EXPRESSION });
   return created.pk;
 }

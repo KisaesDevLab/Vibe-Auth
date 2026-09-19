@@ -37,9 +37,26 @@ type Overview = {
   setup: { done: boolean; completedAt?: string; adminEmail?: string };
   mfaRequired: boolean;
   broker: { version: string };
+  email: EmailStatus;
+};
+type EmailStatus = {
+  configured: boolean;
+  source: "admin" | "env" | "none";
+  host?: string;
+  port?: number;
+  username?: string;
+  security?: "starttls" | "ssl" | "none";
+  from?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  recoveryUrl: string;
 };
 type User = { pk: number; username: string; name: string; email: string; active: boolean; superuser: boolean; lastLogin: string | null; groups: string[] };
 type Reg = { slug: string; displayName: string; baseUrl: string; clientId: string; status: string; updatedAt: string; rotatedAt: string | null; publicPaths: string[] };
+type Access = {
+  apps: Array<{ slug: string; displayName: string; restricted: boolean; registered: boolean; members: number }>;
+  users: Array<{ pk: number; apps: string[]; admin: boolean }>;
+};
 type Verify = { slug: string; ok: boolean; problems: string[]; issuer: string };
 type Source = { slug: string; name: string; enabled: boolean; type?: string; callbackUrl: string };
 type Audit = { type: string; at: string; [k: string]: unknown };
@@ -50,6 +67,7 @@ const PAGES = [
   ["users", "Users"],
   ["products", "Products"],
   ["sources", "Identity sources"],
+  ["email", "Email"],
   ["audit", "Audit"],
 ] as const;
 type Page = (typeof PAGES)[number][0];
@@ -95,6 +113,10 @@ function OverviewPage() {
           <p className="muted">Broker {o.broker.version} · authentik {o.authentik.version ?? "unreachable"} <span className={`pill ${o.authentik.reachable ? "ok" : "bad"}`}>{o.authentik.reachable ? "reachable" : "down"}</span></p>
           <p className="muted">Routing <code>{o.routing.mode}</code> · public <code>{o.routing.publicBase}</code> · internal <code>{o.routing.internalBase}</code></p>
           <p className="muted">{o.counts.users} users · {o.counts.registrations} registered products · setup {o.setup.done ? `done (${o.setup.adminEmail})` : "pending"}</p>
+          <p className="muted">
+            Password-reset email <span className={`pill ${o.email.configured ? "ok" : "bad"}`}>{o.email.configured ? `${o.email.source === "env" ? "container settings" : "configured"} · ${o.email.host}` : "not configured"}</span>
+            {!o.email.configured && <> — staff cannot reset their own passwords. <a href={`${BASE}/admin/email`}>Set up email</a>.</>}
+          </p>
           <div className="row">
             <a href={o.authentik.adminUrl} target="_blank" rel="noreferrer"><button>Open authentik admin</button></a>
             <a href={`${BASE}/auth/oidc/logout`}><button>Sign out</button></a>
@@ -113,7 +135,15 @@ function OverviewPage() {
 }
 
 function UsersPage() {
-  const { data: users, error, reload } = useLoad(() => api<User[]>("/users"));
+  const { data: users, error, reload: reloadUsers } = useLoad(() => api<User[]>("/users"));
+  const { data: access, reload: reloadAccess } = useLoad(() => api<Access>("/access"));
+  const reload = () => {
+    reloadUsers();
+    reloadAccess();
+  };
+  // Only restricted products need ticking; open ones admit every firm user.
+  const restrictedApps = (access?.apps ?? []).filter((a) => a.restricted && a.registered);
+  const openApps = (access?.apps ?? []).filter((a) => !a.restricted && a.registered);
   const [busy, setBusy] = useState<number | null>(null);
   const [showNew, setShowNew] = useState(false);
   const act = async (pk: number, fn: () => Promise<unknown>) => {
@@ -131,9 +161,12 @@ function UsersPage() {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const groups = GROUPS.filter((g) => fd.get(g) === "on");
+    const apps = restrictedApps.filter((a) => fd.get(`app:${a.slug}`) === "on").map((a) => a.slug);
     try {
-      const r = await api<{ recoveryUrl: string }>("/users", { method: "POST", body: JSON.stringify({ email: fd.get("email"), name: fd.get("name"), groups }) });
-      alert(`User created. Ask them to set a password at:\n${r.recoveryUrl}`);
+      const r = await api<{ emailed: boolean; recoveryLink: string | null; recoveryUrl: string }>("/users", { method: "POST", body: JSON.stringify({ email: fd.get("email"), name: fd.get("name"), groups, apps }) });
+      const link = r.recoveryLink ?? r.recoveryUrl;
+      if (r.emailed) window.prompt(`User created. A set-password email was sent to ${String(fd.get("email"))}.\nIf it does not arrive, give them this one-time link (valid 30 minutes):`, link);
+      else window.prompt("User created. No reset email was sent (outbound email is not configured or failed).\nGive them this one-time link to set a password (valid 30 minutes):", link);
       setShowNew(false);
       reload();
     } catch (err) {
@@ -152,12 +185,13 @@ function UsersPage() {
           <label>Name<input name="name" required /></label>
           <label>Email<input name="email" type="email" required /></label>
           <div className="row">{GROUPS.map((g) => (<label key={g} className="row" style={{ gap: ".3rem" }}><input type="checkbox" name={g} defaultChecked={g === "vibe-staff"} />{g}</label>))}</div>
+          {restrictedApps.length > 0 && <div className="row"><span className="muted">Apps:</span>{restrictedApps.map((a) => (<label key={a.slug} className="row" style={{ gap: ".3rem" }}><input type="checkbox" name={`app:${a.slug}`} />{a.displayName}</label>))}</div>}
           <div><button className="primary" type="submit">Create</button></div>
         </form>
       )}
       {!users ? <p>Loading…</p> : (
         <table>
-          <thead><tr><th>User</th><th>Groups</th><th>Status</th><th>Last sign-in</th><th /></tr></thead>
+          <thead><tr><th>User</th><th>Groups</th><th title="Products this person may sign in to. Restrict a product on the Products page to choose who gets in.">Apps</th><th>Status</th><th>Last sign-in</th><th /></tr></thead>
           <tbody>
             {users.map((u) => (
               <tr key={u.pk}>
@@ -172,11 +206,44 @@ function UsersPage() {
                     ))}
                   </div>
                 </td>
+                <td>
+                  {(() => {
+                    const mine = access?.users.find((x) => x.pk === u.pk);
+                    if (!access) return <span className="muted">…</span>;
+                    if (restrictedApps.length === 0) return <span className="muted">all apps</span>;
+                    if (mine?.admin) return <span className="muted" title="vibe-admin members can always sign in to every product">all apps (admin)</span>;
+                    const ticked = (mine?.apps ?? []).filter((x) => restrictedApps.some((a) => a.slug === x));
+                    return (
+                      <div className="row" style={{ gap: ".25rem" }}>
+                        {restrictedApps.map((a) => (
+                          <label key={a.slug} className="row" style={{ gap: ".2rem", fontSize: ".8rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={ticked.includes(a.slug)}
+                              disabled={busy === u.pk}
+                              onChange={(e) => {
+                                const on = e.target.checked;
+                                if (!on && !window.confirm(`Remove ${a.displayName} from ${u.email || u.username}? They are signed out of every product now and can sign back in to the apps they still have.`)) return;
+                                // Memberships of open or unregistered products stay untouched: send everything they have, plus or minus this one.
+                                const next = on ? [...(mine?.apps ?? []), a.slug] : (mine?.apps ?? []).filter((x) => x !== a.slug);
+                                void act(u.pk, () => api(`/users/${u.pk}/apps`, { method: "PUT", body: JSON.stringify({ apps: next }) }));
+                              }}
+                            />
+                            {a.displayName}
+                          </label>
+                        ))}
+                        {openApps.length > 0 && <span className="muted" style={{ fontSize: ".8rem" }}>+ {openApps.length} open</span>}
+                      </div>
+                    );
+                  })()}
+                </td>
                 <td><span className={`pill ${u.active ? "ok" : "bad"}`}>{u.active ? "active" : "disabled"}</span></td>
                 <td className="muted">{u.lastLogin ? new Date(u.lastLogin).toLocaleString() : "never"}</td>
                 <td>
                   <div className="row">
                     <button disabled={busy === u.pk} onClick={() => window.confirm(`Remove all MFA devices for ${u.email}? They will re-enrol at next sign-in.`) && void act(u.pk, () => api(`/users/${u.pk}/mfa-reset`, { method: "POST" }))}>Reset MFA</button>
+                    <button disabled={busy === u.pk} title="Email a one-time set-password link through the recovery flow" onClick={() => void act(u.pk, async () => { const r = await api<{ to: string }>(`/users/${u.pk}/recovery-email`, { method: "POST" }); alert(`Reset email queued for ${r.to}.`); })}>Send reset email</button>
+                    <button disabled={busy === u.pk} title="Create a one-time set-password link to hand over in person or by chat" onClick={() => void act(u.pk, async () => { const r = await api<{ link: string }>(`/users/${u.pk}/recovery-link`, { method: "POST" }); window.prompt(`One-time password-reset link for ${u.email || u.username} (valid 30 minutes, shown once):`, r.link); })}>Reset link</button>
                     <button disabled={busy === u.pk} onClick={() => void act(u.pk, () => api(`/users/${u.pk}/sessions/end`, { method: "POST" }))}>End sessions</button>
                     <button className={u.active ? "danger" : "primary"} disabled={busy === u.pk} onClick={() => void act(u.pk, () => api(`/users/${u.pk}/active`, { method: "POST", body: JSON.stringify({ active: !u.active }) }))}>{u.active ? "Deactivate" : "Activate"}</button>
                   </div>
@@ -191,8 +258,27 @@ function UsersPage() {
 }
 
 function ProductsPage() {
-  const { data: regs, error, reload } = useLoad(() => api<Reg[]>("/registrations"));
+  const { data: regs, error, reload: reloadRegs } = useLoad(() => api<Reg[]>("/registrations"));
+  const { data: access, reload: reloadAccess } = useLoad(() => api<Access>("/access"));
+  const reload = () => {
+    reloadRegs();
+    reloadAccess();
+  };
   const [verify, setVerify] = useState<Verify[] | null>(null);
+  const setAccess = async (r: Reg, restricted: boolean) => {
+    let seed: "everyone" | "none" = "none";
+    if (restricted) {
+      if (!window.confirm(`Restrict ${r.displayName}? Only the people you tick on the Users page (and vibe-admin members) will be able to sign in with single sign-on.`)) return;
+      seed = window.confirm("Start with everyone who has an active account, then untick people?\n\nOK = start with everyone\nCancel = start with administrators only") ? "everyone" : "none";
+    } else if (!window.confirm(`Open ${r.displayName} to every firm user again? The list of ticked users is kept in case you restrict it later.`)) return;
+    try {
+      await api(`/registrations/${r.slug}/access`, { method: "PUT", body: JSON.stringify({ restricted, seed }) });
+      reload();
+    } catch (e) {
+      alert((e as Error).message);
+    }
+  };
+  const orphans = (access?.apps ?? []).filter((a) => !a.registered);
   const runVerify = async () => setVerify(await api<Verify[]>("/registrations/verify"));
   if (error) return <p role="alert">{error}</p>;
   return (
@@ -202,17 +288,27 @@ function ProductsPage() {
         <button onClick={() => void runVerify()}>Verify all</button>
       </div>
       <p className="muted">Products are registered by the Appliance console (or `POST /registrations` with the console token). Each product decides its own sign-in mode (local / both / oidc_only) in its Settings → Authentication page.</p>
+      <p className="muted">Access: a product is open to every firm user until you restrict it; then only the people ticked on the Users page and vibe-admin members can use single sign-on. This does not block a local password in a product that is still in <code>both</code> mode.</p>
       {!regs ? <p>Loading…</p> : (
         <table>
-          <thead><tr><th>Product</th><th>Base URL</th><th>Client ID</th><th>Updated</th><th>Check</th><th /></tr></thead>
+          <thead><tr><th>Product</th><th>Base URL</th><th>Client ID</th><th>Access</th><th>Updated</th><th>Check</th><th /></tr></thead>
           <tbody>
             {regs.map((r) => {
               const v = verify?.find((x) => x.slug === r.slug);
+              const a = access?.apps.find((x) => x.slug === r.slug);
               return (
                 <tr key={r.slug}>
                   <td>{r.displayName}<br /><span className="muted">{r.slug}</span></td>
                   <td><code>{r.baseUrl}</code></td>
                   <td><code>{r.clientId}</code></td>
+                  <td>
+                    {r.slug === "vibe-auth-admin" ? <span className="muted">admins only</span> : !a ? <span className="muted">…</span> : (
+                      <div className="row" style={{ gap: ".4rem" }}>
+                        <span className={`pill ${a.restricted ? "" : "ok"}`}>{a.restricted ? `Restricted · ${a.members} user${a.members === 1 ? "" : "s"}` : "Everyone"}</span>
+                        <button onClick={() => void setAccess(r, !a.restricted)}>{a.restricted ? "Open to everyone" : "Restrict"}</button>
+                      </div>
+                    )}
+                  </td>
                   <td className="muted">{new Date(r.updatedAt).toLocaleString()}{r.rotatedAt && <><br />rotated {new Date(r.rotatedAt).toLocaleDateString()}</>}</td>
                   <td>{v ? (v.ok ? <span className="pill ok">ok</span> : <span className="pill bad" title={v.problems.join("\n")}>{v.problems.length} problem(s)</span>) : <span className="muted">—</span>}{v && !v.ok && <ul className="muted">{v.problems.map((p) => <li key={p}>{p}</li>)}</ul>}</td>
                   <td>{r.slug !== "vibe-auth-admin" && <button className="danger" onClick={() => window.confirm(`Disable SSO registration for ${r.displayName}? The product falls back to local sign-in.`) && api(`/registrations/${r.slug}`, { method: "DELETE" }).then(reload)}>Disable</button>}</td>
@@ -221,6 +317,12 @@ function ProductsPage() {
             })}
           </tbody>
         </table>
+      )}
+      {orphans.length > 0 && (
+        <p className="muted">
+          Restricted but no longer registered (the restriction returns if the product is registered again):{" "}
+          {orphans.map((o) => (<span key={o.slug} className="row" style={{ display: "inline-flex", gap: ".3rem", marginRight: ".6rem" }}><code>{o.slug}</code><button onClick={() => window.confirm(`Forget the restriction on ${o.slug}?`) && api(`/access/${o.slug}`, { method: "DELETE" }).then(reload)}>Forget</button></span>))}
+        </p>
       )}
     </div>
   );
@@ -265,6 +367,70 @@ function SourcesPage() {
         </form>
         {msg && <p className="muted">{msg}</p>}
         <p className="muted">{type === "entra" ? "In Entra: App registrations → your app → Authentication → add the redirect URI shown above; App roles → create vibe-admin / vibe-partner / vibe-manager / vibe-staff / vibe-it and assign users; Token configuration → add the roles and email claims." : "In Google Cloud Console: OAuth client (Web) → add the redirect URI shown above. Map groups by naming Google groups vibe-*."}</p>
+      </div>
+    </>
+  );
+}
+
+function EmailPage() {
+  const { data: st, error, reload } = useLoad(() => api<EmailStatus>("/email"));
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [security, setSecurity] = useState<"starttls" | "ssl" | "none">("starttls");
+  useEffect(() => {
+    if (st?.source === "admin" && st.security) setSecurity(st.security);
+  }, [st]);
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      setMsg({ ok: true, text: await fn() });
+      reload();
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    void run(async () => {
+      await api("/email", { method: "PUT", body: JSON.stringify({ host: fd.get("host"), port: fd.get("port"), security, username: fd.get("username") || undefined, password: fd.get("password") || undefined, from: fd.get("from") }) });
+      return "Saved and applied to the recovery flow. Send yourself a test to confirm delivery.";
+    });
+  };
+  if (error) return <p role="alert">{error}</p>;
+  if (!st) return <p>Loading…</p>;
+  const editing = st.source === "admin" ? st : null;
+  return (
+    <>
+      <div className="card">
+        <h2>Outbound email</h2>
+        <p className="muted">
+          Used for the sign-in page's "Forgot password?" flow and for the reset emails sent from the Users page. Status:{" "}
+          <span className={`pill ${st.configured ? "ok" : "bad"}`}>{st.configured ? (st.source === "env" ? "container settings" : "configured here") : "not configured"}</span>
+          {st.configured && <> · {st.host}:{st.port} · from {st.from}{st.username ? ` · as ${st.username}` : ""}{st.updatedAt ? ` · saved ${new Date(st.updatedAt).toLocaleString()} by ${st.updatedBy}` : ""}</>}
+        </p>
+        <p className="muted">Self-service reset page: <code>{st.recoveryUrl}</code></p>
+        <div className="row">
+          <button className="primary" disabled={busy || !st.configured} onClick={() => void run(async () => { const r = await api<{ to: string }>("/email/test", { method: "POST", body: JSON.stringify({}) }); return `Test email delivered to the mail server for ${r.to}. Check that inbox.`; })}>Send me a test email</button>
+          {st.source === "admin" && <button className="danger" disabled={busy} onClick={() => window.confirm("Remove these settings? The recovery flow falls back to the container's AUTHENTIK_EMAIL__* values (if any).") && void run(async () => { await api("/email", { method: "DELETE" }); return "Settings removed."; })}>Remove settings</button>}
+        </div>
+        {msg && <p className={msg.ok ? "muted" : ""} role={msg.ok ? undefined : "alert"} style={msg.ok ? undefined : { color: "#dc2626" }}>{msg.text}</p>}
+      </div>
+      <div className="card">
+        <h2>{editing ? "Update mail server" : "Add a mail server"}</h2>
+        <form onSubmit={save} className="grid2" key={editing?.updatedAt ?? "new"}>
+          <label>SMTP host<input name="host" required defaultValue={editing?.host ?? ""} placeholder="smtp.office365.com" autoComplete="off" /></label>
+          <label>Port<input name="port" type="number" min={1} max={65535} required defaultValue={editing?.port ?? (security === "ssl" ? 465 : 587)} /></label>
+          <label>Encryption<select value={security} onChange={(e) => setSecurity(e.target.value as typeof security)}><option value="starttls">STARTTLS (port 587)</option><option value="ssl">SSL/TLS (port 465)</option><option value="none">None (internal relay only)</option></select></label>
+          <label>From address<input name="from" type="email" required defaultValue={editing?.from ?? ""} placeholder="vibe-auth@firm.example" /></label>
+          <label>Username (blank = no authentication)<input name="username" defaultValue={editing?.username ?? ""} autoComplete="off" /></label>
+          <label>Password{editing?.username ? " (blank keeps the saved one)" : ""}<input name="password" type="password" autoComplete="new-password" /></label>
+          <div><button className="primary" type="submit" disabled={busy}>Save</button></div>
+        </form>
+        <p className="muted">Microsoft 365: smtp.office365.com, port 587, STARTTLS, a mailbox with "Authenticated SMTP" enabled. Google Workspace: smtp.gmail.com, port 587, STARTTLS, an app password. The password is stored encrypted with the broker key and handed to authentik; it is never shown again.</p>
       </div>
     </>
   );
@@ -321,6 +487,7 @@ function App() {
         {page === "users" && <UsersPage />}
         {page === "products" && <ProductsPage />}
         {page === "sources" && <SourcesPage />}
+        {page === "email" && <EmailPage />}
         {page === "audit" && <AuditPage />}
       </main>
     </>

@@ -98,6 +98,14 @@ export class Db {
   async setState(key: string, value: unknown): Promise<void> {
     await this.query("INSERT INTO vibe_broker_state (key, value, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()", [key, JSON.stringify(value)]);
   }
+  /** Keys starting with `prefix`, e.g. "access:". */
+  async listState<T = unknown>(prefix: string): Promise<Array<{ key: string; value: T }>> {
+    const r = await this.query("SELECT key, value FROM vibe_broker_state WHERE left(key, length($1)) = $1 ORDER BY key", [prefix]);
+    return r.map((x) => ({ key: String(x.key), value: x.value as T }));
+  }
+  async deleteState(key: string): Promise<void> {
+    await this.query("DELETE FROM vibe_broker_state WHERE key = $1", [key]);
+  }
 
   wrap(plain: string): string {
     const iv = randomBytes(12);

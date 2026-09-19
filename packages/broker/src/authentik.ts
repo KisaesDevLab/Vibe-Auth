@@ -39,6 +39,15 @@ export interface AkUser {
   attributes?: Record<string, unknown>;
   type?: string;
 }
+export interface AkEmailStage extends AkStage {
+  use_global_settings?: boolean;
+  host?: string;
+  port?: number;
+  username?: string;
+  from_address?: string;
+  use_tls?: boolean;
+  use_ssl?: boolean;
+}
 export interface AkFlow {
   pk: string;
   slug: string;
@@ -71,6 +80,17 @@ export interface AkApplication {
   provider: number | null;
   meta_launch_url: string;
   group: string;
+  policy_engine_mode?: "all" | "any";
+}
+/** A policy binding on a PolicyBindingModel (here: an application). Exactly one of policy / group / user is set. */
+export interface AkBinding {
+  pk: string;
+  target: string;
+  policy: string | null;
+  group: string | null;
+  user: number | null;
+  enabled: boolean;
+  order: number;
 }
 export interface AkScopeMapping {
   pk: string;
@@ -219,6 +239,14 @@ export class Authentik {
   patchValidateStage(pk: string, body: Record<string, unknown>) {
     return this.patch<AkStage>(`/stages/authenticator/validate/${pk}/`, body);
   }
+  async emailStageByName(name: string): Promise<AkEmailStage | null> {
+    const r = await this.get<Paginated<AkEmailStage>>("/stages/email/", { name });
+    return r.results[0] ?? null;
+  }
+  /** `password` is write-only on authentik's side; pass use_global_settings=true to fall back to AUTHENTIK_EMAIL__*. */
+  patchEmailStage(pk: string, body: Record<string, unknown>) {
+    return this.patch<AkEmailStage>(`/stages/email/${pk}/`, body);
+  }
   async certByName(name: string): Promise<AkCert | null> {
     const r = await this.get<Paginated<AkCert>>("/crypto/certificatekeypairs/", { name });
     return r.results[0] ?? null;
@@ -272,6 +300,15 @@ export class Authentik {
   }
   setPassword(pk: number, password: string) {
     return this.post<void>(`/core/users/${pk}/set_password/`, { password });
+  }
+  /** One-time link into the brand's recovery flow (set by bootstrap); the token expires per authentik's default (30 min). */
+  async createRecoveryLink(pk: number): Promise<string> {
+    const r = await this.post<{ link: string }>(`/core/users/${pk}/recovery/`, undefined);
+    return r.link;
+  }
+  /** Ask authentik to email a recovery link through the given email stage. Delivery is asynchronous on authentik's side. */
+  sendRecoveryEmail(pk: number, emailStagePk: string) {
+    return this.request<void>("POST", `/core/users/${pk}/recovery_email/`, undefined, { email_stage: emailStagePk });
   }
   /** All authenticator devices for a user (admin view). */
   devices(userPk: number) {
@@ -330,6 +367,21 @@ export class Authentik {
   }
   patchApplication(slug: string, body: Record<string, unknown>) {
     return this.patch<AkApplication>(`/core/applications/${slug}/`, body);
+  }
+  // ---- application access (policy bindings). An application with zero bindings admits everyone;
+  // with bindings and policy_engine_mode "any", a user must match at least one of them.
+  bindings(target: string) {
+    return this.list<AkBinding>("/policies/bindings/", { target });
+  }
+  createGroupBinding(target: string, groupPk: string, order: number) {
+    return this.post<AkBinding>("/policies/bindings/", { target, group: groupPk, order, enabled: true, negate: false, timeout: 30, failure_result: false });
+  }
+  deleteBinding(pk: string) {
+    return this.delete(`/policies/bindings/${pk}/`);
+  }
+  /** Only meaningful with a superuser token: authentik silently checks the caller otherwise. */
+  checkAccess(slug: string, userPk: number) {
+    return this.get<{ passing: boolean; messages: string[] }>(`/core/applications/${slug}/check_access/`, { for_user: userPk });
   }
   deleteApplication(slug: string) {
     return this.delete(`/core/applications/${slug}/`);
@@ -406,6 +458,9 @@ export class Authentik {
   }
   createSourcePropertyMapping(body: { name: string; expression: string }) {
     return this.post<{ pk: string; name: string }>("/propertymappings/source/oauth/", body);
+  }
+  updateSourcePropertyMapping(pk: string, body: Partial<{ name: string; expression: string }>) {
+    return this.patch<{ pk: string; name: string }>(`/propertymappings/source/oauth/${pk}/`, body);
   }
 
   // ---- events (for audit forwarding)

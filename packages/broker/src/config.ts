@@ -50,9 +50,16 @@ export const schema = z.object({
   VIBE_AUTH_AUDIT_FILE: z.string().default("/data/audit.jsonl"),
   VIBE_AUTH_SENTINEL_URL: z.string().url().optional(),
   VIBE_AUTH_SENTINEL_TOKEN: z.string().optional(),
+  /** Container-level outbound mail (same values the compose file hands authentik as AUTHENTIK_EMAIL__*). Admin-entered settings override them. */
+  VIBE_AUTH_SMTP_HOST: z.string().trim().optional().transform((s) => s || undefined),
+  VIBE_AUTH_SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  VIBE_AUTH_SMTP_USER: z.string().optional(),
+  VIBE_AUTH_SMTP_PASS: z.string().optional(),
+  VIBE_AUTH_SMTP_TLS: bool.default(true),
+  VIBE_AUTH_SMTP_FROM: z.string().default("vibe-auth@localhost"),
   VIBE_AUTH_EVENT_POLL_SECONDS: z.coerce.number().int().min(0).default(30),
   VIBE_AUTH_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.4"),
+  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.5"),
 });
 
 export type BrokerConfig = z.infer<typeof schema> & {

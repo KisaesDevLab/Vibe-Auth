@@ -105,6 +105,13 @@ services:
       VIBE_AUTH_MFA_REQUIRED: ${VIBE_AUTH_MFA_REQUIRED:-true}
       VIBE_AUTH_SENTINEL_URL: ${VIBE_AUTH_SENTINEL_URL:-}
       VIBE_AUTH_SENTINEL_TOKEN: ${VIBE_AUTH_SENTINEL_TOKEN:-}
+      # Same mail settings authentik receives above, so the admin console can report and test them.
+      VIBE_AUTH_SMTP_HOST: ${VIBE_AUTH_SMTP_HOST:-}
+      VIBE_AUTH_SMTP_PORT: ${VIBE_AUTH_SMTP_PORT:-587}
+      VIBE_AUTH_SMTP_USER: ${VIBE_AUTH_SMTP_USER:-}
+      VIBE_AUTH_SMTP_PASS: ${VIBE_AUTH_SMTP_PASS:-}
+      VIBE_AUTH_SMTP_TLS: ${VIBE_AUTH_SMTP_TLS:-true}
+      VIBE_AUTH_SMTP_FROM: ${VIBE_AUTH_SMTP_FROM:-vibe-auth@localhost}
       VIBE_AUTH_LOG_LEVEL: ${VIBE_AUTH_LOG_LEVEL:-info}
     volumes:
       - vibe-auth-data:/data

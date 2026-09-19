@@ -8,6 +8,8 @@ All items were answered in the Q&A session of 2026-09-16 and folded into the bui
 - **H3 (Phase 7)** — bare-metal box on the office LAN, run by the human with `test/scripts/phase7.sh` (D30, `docs/phase7-checklist.md`). Results to be pasted into `STATE.md`.
 - **H4** — runbooks in `docs/firm/runbooks.md` still need execution by a non-author.
 - **Follow-up: restore ordering in Vibe Backup** (separate PR in `Vibe-Backup`: ordering field in the contract + multi-module restore).
+- **What should `vibe-it` mean inside products?** (raised 2026-09-19, v1.0.5) — The firm guide and the `10-vibe-groups.yaml` description said "Vibe Auth administration only, no product access", but `defaultRoleMapFor()` in `packages/client/src/config.ts` maps `vibe-it` to each product's **administrator** role and every plan under `docs/integration-plans/` repeats that. Nothing ever enforced "no product access"; D22 only lists the group. Decide: (a) IT staff are product administrators and the old wording was a documentation error (the guide now says this), or (b) drop `vibe-it` from the default role map (client package change, twelve integration plans, behaviour change for anyone relying on it). Until decided, per-product access gives firms the practical control: restrict a product and do not tick IT staff.
+- **Directory-driven app access** (raised 2026-09-19) — v1.0.5 assigns apps per user in the console only. Letting Entra/Google group names drive `vibe-app-<slug>` membership is possible but must be all-or-nothing per product, because a source-linked group is stripped from federated users whose directory does not send it. Not built; ask if a firm wants it.
 
 ## Answered 2026-09-16
 

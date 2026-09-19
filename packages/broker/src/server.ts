@@ -3,12 +3,14 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
+import { AppAccess } from "./access.js";
 import { buildAdmin } from "./admin.js";
 import { BrokerAudit, startEventForwarder } from "./audit.js";
 import { Authentik } from "./authentik.js";
 import { bootstrapAuthentik, type BootstrapResult, ensureBaseUrl } from "./bootstrap.js";
 import { loadConfig, rebaseConfig, type BrokerConfig } from "./config.js";
 import { Db } from "./db.js";
+import { EmailConfig } from "./email.js";
 import { createLogger } from "./log.js";
 import { NotFound, registrationInput, Registrations } from "./registrations.js";
 import { Setup, setupDonePage, setupPage } from "./setup.js";
@@ -28,18 +30,16 @@ export async function main(): Promise<void> {
 
   const ak = new Authentik(cfg.authentikInternalBase, cfg.VIBE_AUTH_AUTHENTIK_TOKEN);
   const audit = new BrokerAudit(cfg, db, log);
-  const setup = new Setup(cfg, db, ak, log);
+  const email = new EmailConfig(() => cfg, db, ak, log);
+  const setup = new Setup(cfg, db, ak, log, email);
   let boot: BootstrapResult | null = null;
   let bootError: string | null = null;
-  const regs = new Registrations(
-    () => cfg,
-    ak,
-    db,
-    () => {
-      if (!boot) throw new Error("authentik not bootstrapped yet");
-      return boot;
-    },
-  );
+  const requireBoot = () => {
+    if (!boot) throw new Error("authentik not bootstrapped yet");
+    return boot;
+  };
+  const access = new AppAccess(ak, db, requireBoot, log);
+  const regs = new Registrations(() => cfg, ak, db, requireBoot, access);
 
   const app = express();
   app.set("trust proxy", true);
@@ -101,6 +101,24 @@ export async function main(): Promise<void> {
       throw e;
     }
   });
+  // Per-product sign-in restriction (same switch as the admin console's Products page; users are ticked there).
+  consoleApi.get("/registrations/:slug/access", async (req, res) => {
+    if (!(await regs.get(req.params.slug))) return res.status(404).json({ error: "not_found" });
+    res.json(await access.get(req.params.slug));
+  });
+  consoleApi.put("/registrations/:slug/access", async (req, res) => {
+    const b = req.body as { restricted?: boolean; seed?: "everyone" | "none" };
+    const reg = await regs.get(req.params.slug);
+    if (!reg) return res.status(404).json({ error: "not_found" });
+    if (typeof b.restricted !== "boolean") return res.status(400).json({ error: "restricted (boolean) required" });
+    try {
+      const r = await access.set(reg, b.restricted, "console", b.seed === "everyone" ? "everyone" : "none");
+      audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: b.restricted ? "app_access_restricted" : "app_access_opened", slug: reg.slug, seeded: r.seeded, actor: "console" });
+      res.json({ ok: true, restricted: b.restricted, seeded: r.seeded });
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
   consoleApi.delete("/registrations/:slug", async (req, res) => {
     const ok = await regs.remove(req.params.slug);
     if (ok) audit.emit({ type: "vibe.auth.registration.deleted" as never, at: new Date().toISOString(), slug: req.params.slug, action: "delete", actor: "console" });
@@ -133,11 +151,21 @@ export async function main(): Promise<void> {
   app.post(`${base}/setup`, express.urlencoded({ extended: false }), async (req, res) => {
     if (!boot) return res.status(503).type("html").send(setupPage({ basePath: base, token: String(req.body.token ?? ""), brand: cfg.VIBE_AUTH_BRAND_NAME, error: "Authentik is still starting; try again in a minute." }));
     const b = req.body as Record<string, string>;
-    const r = await setup.complete({ token: b.token ?? "", firmName: b.firmName ?? "", adminEmail: b.adminEmail ?? "", adminName: b.adminName ?? "", password: b.password ?? "" }, boot);
+    const r = await setup.complete(
+      {
+        token: b.token ?? "",
+        firmName: b.firmName ?? "",
+        adminEmail: b.adminEmail ?? "",
+        adminName: b.adminName ?? "",
+        password: b.password ?? "",
+        smtp: { host: b.smtpHost, port: b.smtpPort, security: b.smtpSecurity, username: b.smtpUser, password: b.smtpPass, from: b.smtpFrom },
+      },
+      boot,
+    );
     if (!r.ok) return res.status(400).type("html").send(setupPage({ basePath: base, token: b.token ?? "", brand: cfg.VIBE_AUTH_BRAND_NAME, error: r.error }));
     cfg.VIBE_AUTH_BRAND_NAME = b.firmName!;
-    audit.emit({ type: "vibe.auth.setup.completed" as never, at: new Date().toISOString(), admin_email: b.adminEmail });
-    res.type("html").send(setupDonePage({ loginUrl: r.loginUrl, adminUrl: `${cfg.brokerPublicBase}/admin`, brand: b.firmName! }));
+    audit.emit({ type: "vibe.auth.setup.completed" as never, at: new Date().toISOString(), admin_email: b.adminEmail, email_configured: !!b.smtpHost });
+    res.type("html").send(setupDonePage({ loginUrl: r.loginUrl, adminUrl: `${cfg.brokerPublicBase}/admin`, brand: b.firmName!, emailNote: r.emailNote }));
   });
 
   // ---- admin console (mounted after bootstrap completes)
@@ -161,7 +189,9 @@ export async function main(): Promise<void> {
       try {
         boot = await bootstrapAuthentik(cfg, ak, db, log);
         await setup.init();
-        const admin = await buildAdmin({ cfg: () => cfg, db, ak, boot: () => boot!, regs, audit, setup, log });
+        // Re-assert per-product access: bindings deleted by hand in authentik would otherwise leave a restricted product open.
+        for (const r of await regs.list()) await access.sync(r).catch((e: Error) => log.warn("could not sync product access", { slug: r.slug, error: e.message }));
+        const admin = await buildAdmin({ cfg: () => cfg, db, ak, boot: () => boot!, regs, audit, setup, email, access, log });
         adminRouter = admin.router;
         await admin.ready();
         stopForwarder = startEventForwarder(cfg, ak, db, audit, log);

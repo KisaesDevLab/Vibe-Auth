@@ -1,6 +1,7 @@
 import type { Authentik, AkGroup } from "./authentik.js";
 import type { BrokerConfig } from "./config.js";
 import type { Db } from "./db.js";
+import { EmailConfig } from "./email.js";
 import type { Logger } from "./log.js";
 
 /**
@@ -177,6 +178,10 @@ export async function bootstrapAuthentik(cfg: BrokerConfig, ak: Authentik, db: D
   }
 
   await ensureBaseUrl(cfg, ak, log);
+
+  // Outbound mail for password reset: admin-entered SMTP settings live in broker_state and are
+  // pushed onto the recovery flow's email stage (authentik's global mail settings are env-only).
+  await new EmailConfig(() => cfg, db, ak, log).apply().catch((e) => log.warn("could not apply email settings to the recovery stage", { error: (e as Error).message }));
 
   // MFA enforcement (D23): default on; a logged acknowledgement can turn it off (stored in broker_state).
   const mfaState = (await db.getState<{ required: boolean }>("mfa"))?.required ?? cfg.VIBE_AUTH_MFA_REQUIRED;
