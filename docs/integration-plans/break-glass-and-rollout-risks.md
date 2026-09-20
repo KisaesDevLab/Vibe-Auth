@@ -153,6 +153,9 @@ check. Anchors are in the product repository named in the first column.
 
 - **Payroll & Time**: `users.id` is `bigIncrements`, not uuid, and `disabled_at` already exists
   (`backend/migrations/20260420000002_users.js:11,23,27`). Corrected in `vibe-payroll-time.md`.
+- **Payroll & Time, found while implementing (2026-09-20)**: the prescribed `/auth/*` matcher would have broken every emailed login and
+  reset link (the SPA owns `/auth/magic`, `/auth/reset`); and provisioning break-glass before the first-run wizard bricks setup, because any
+  `super_admin` row locks it. Both are now README lessons 11 and 12 and should be checked on every remaining product.
 - **Recap**: command path, above. Corrected in `vibe-recap.md`.
 - **Entity**: a dormant bearer-only OIDC stub (`apps/api/src/auth.ts:19-57`) replaces cookie auth
   entirely if `VIBE_APPLIANCE_OIDC_ISSUER` is ever set. The plan deletes it; do that first.

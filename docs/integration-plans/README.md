@@ -31,6 +31,15 @@ These are not in `INTEGRATION-PLAN.md`; they were learned enabling Vibe Auth and
 9. **authentik 2026.8 wants its Base URL.** The appliance seeds `AUTHENTIK_WEB__BASE_URL` and broker 1.0.3 writes the setting. Nothing for products to do; noted so nobody "fixes" it product-side.
 10. **Registration only happens on enable or via the Identity panel.** After changing a product's `sso` block, the host needs `sudo vibe identity register <slug>` (or "Fix registration"); a rebuilt image alone does not re-register.
 
+## Lessons from the Payroll & Time implementation (2026-09-20)
+
+Both were errors in a written plan, caught while implementing. Check them on every remaining product.
+
+11. **Check what the SPA already owns under `/auth` before writing the `/auth/*` matcher.** Lesson 4 says the matcher is mandatory when the SPA is a separate container; it does not say the SPA may already have routes there. Payroll & Time serves its emailed login-link and password-reset landing pages at `/auth/magic` and `/auth/reset`; a blanket matcher would have sent every such link to the API, which answers `404 not_found`. Grep the SPA's router for `/auth` first. On a collision, route the engine's paths one by one — `/auth/oidc/*`, `/auth/status`, `/auth/me`, `/auth/settings`, `/auth/settings/*` — in the manifest **and** in the product's own reverse proxy and dev proxy. `lib/identity.sh` still finds the tier (first matcher under `/auth`); the Appliance's manifest validator was generalised to allow it (`Vibe-Appliance` PR #9: every `redirectPaths` / `logoutPaths` entry must be covered by a matcher on the auth tier).
+12. **Break-glass must not be provisioned before the product's first-run setup.** A product whose setup wizard locks once *any* admin row exists (Payroll & Time: `anySuperAdminHasExisted`) is bricked by `identity register` running first: `ensure` creates the only admin, the wizard refuses for ever, and there is no company to administer. Payroll & Time's adapter refuses `createLocalUser` and JIT `create` until setup has completed — but the Appliance swallows that failure (`_id_breakglass … || true`), so the operator must run setup and then register again. Appliance follow-up D.1 (verify break-glass) would surface it.
+13. **Do not trust `linked.user.role` when minting the session.** If the adapter's `setRole` keeps the old role (last-admin protection — the package offers no way to refuse, follow-up D.3), `linkOrProvision` still returns the *mapped* role. Re-read the row in `SessionAdapter.create`.
+14. **A `sid` claim does not survive token refresh by itself.** Products with short access tokens and rotating refresh rows (Payroll & Time: 15 min) must carry the `sid` on the refresh row, or the first rotation turns an SSO session into an anonymous one that sign-out cannot match to its `auth_sessions_oidc` row.
+
 ## Order and status
 
 | # | Product | Plan | Variant | Est. | Status |
@@ -49,7 +58,7 @@ These are not in `INTEGRATION-PLAN.md`; they were learned enabling Vibe Auth and
 | 10 | Recap | `vibe-recap.md` | Fastify + Postgres sessions | 2 h | planned |
 | 11 | Connect | `vibe-connect.md` | Express + express-session, existing OIDC, Tauri | 3–4 h | planned |
 | 12 | Backup | `vibe-backup.md` | Go, no auth, console-proxied | 0.5 h docs | decided: no in-app SSO |
-| 13 | Payroll & Time | `vibe-payroll-time.md` | Express + JWT, kiosk realm untouched | 4–5 h | planned |
+| 13 | Payroll & Time | `vibe-payroll-time.md` | Express + JWT, kiosk realm untouched | 4–5 h | implemented 2026-09-20 (`Vibe-Payroll-Time` PR #3, `Vibe-Appliance` PR #9); **exit gate not met** — fake-IdP suite green and `breakglassCommand` verified inside the built image, but no real-browser or real-authentik sign-in yet. The plan as written had two errors that would have shipped broken; see its header |
 | 14 | Printer | `vibe-printer.md` | no users; edge gate only | 0 h product | decided: no in-app SSO |
 | 15 | Transaction Converter | `vibe-transaction-convertor.md` | Express + Postgres sessions, single image | 2–3 h | planned |
 
