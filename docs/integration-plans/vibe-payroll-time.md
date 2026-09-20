@@ -11,6 +11,27 @@ Variant: **Express + stateless JWT → Trial Balance pattern** (`sid` claim, `#s
 > `varchar(72)`, which holds bcrypt and **not** argon2id. Detail and anchors: `break-glass-and-rollout-risks.md`; the corrected recipe is
 > `../INTEGRATION-PLAN.md` §2.B, I7, I8, I12.
 
+> **Implemented 2026-09-20** — `Vibe-Payroll-Time` PR #3 (branch `feat/sso-vibe-auth`), `Vibe-Appliance` PR #9. The product's `docs/sso.md` § Deviations
+> is the authoritative list. Corrections to THIS plan, kept inline below so nobody re-derives them:
+>
+> 1. **§1.6 and step F were wrong: there must be no `/auth/*` matcher.** The SPA owns `/auth/magic` and `/auth/reset` (`frontend/src/App.tsx`,
+>    `backend/src/services/magic-links.ts` `LANDING_PATH`). The engine's paths are routed one by one. README lesson 11.
+> 2. **Provisioning before first-run setup bricks the product** (`backend/src/services/setup.ts` `isSetupComplete`: any `super_admin` row, ever,
+>    locks `/setup`). The adapter refuses until setup has run. README lesson 12.
+> 3. **Two columns were needed after all.** `refresh_tokens.sso_sid`: the `sid` claim must survive the 15-minute refresh rotation or sign-out cannot
+>    find the identity row (lesson 14). `users.sso_provisioned_at`: `password_hash` is NOT NULL, so I7's "no local factor" had nothing to key on; the
+>    self-service link lookups filter on it, and an admin-sent reset clears it. (`disabled_at` is reused, as step B says.)
+> 4. **The survey undercounted the tests**: 32 vitest files including Postgres-backed API integration tests, not two. The e2e check is therefore a
+>    vitest suite (`backend/src/services/vibe-auth/__tests__/`, 25 cases, in-process fake IdP) inside the existing CI job, not `test/sso-e2e.mjs`.
+> 5. **A key-wrap existed**: `backend/src/services/crypto.ts` (AES-256-GCM on `SECRETS_ENCRYPTION_KEY`). No `lib/secretWrap.ts` was added.
+>    Audit goes to the existing `auth_events` table.
+> 6. The Appliance path prefix is **`/time`**, not `/payroll` (`Vibe-Appliance/console/manifests/vibe-payroll.json` `pathPrefix`).
+> 7. `backend/src/db/migrate.ts` did nothing when executed directly, which is how the console manifest's migrate command runs it (masked by
+>    `MIGRATIONS_AUTO=true` in the env template). Fixed in PR #3.
+> 8. Last-admin protection (I8) lives in the adapter's `setRole`, which keeps the role and logs; the session is minted from the re-read row (lesson 13).
+>
+> Second-factor policy (register §B item 3): **password-only break-glass** — the product has no local MFA; `VIBE_OIDC_REQUIRE_MFA_AMR=true` by default.
+
 ## 0. Facts the plan is built on (survey 2026-09-17)
 
 | Item | Anchor |
@@ -37,7 +58,7 @@ Variant: **Express + stateless JWT → Trial Balance pattern** (`sid` claim, `#s
 3. **Session adapter = TB pattern.** `create` mints the same access + refresh pair `POST /auth/login` mints (`tokens.ts:41-51, :73-139`), adds a `sid` claim to the access token, stores `(sid, user_id, issuer, subject, idp_sid)` in a new `auth_sessions_oidc` table, and lands the SPA on `<return_to>#sso_token=<access>&sso_refresh=<refresh>`. The refresh token must travel too, because the SPA's store expects both (`auth-store.ts:13`); put it in the fragment as well, never in a query string.
 4. **Revocation on every request** (I6): in `requireAuth` (`middleware/auth.ts:31`), right after JWT verify, `await auth.isRevoked({ userId }, iat * 1000)` and 401 when true. Also reject refresh for a revoked user in `tokens.ts:73-139` so a revoked session cannot rotate back in.
 5. **`destroyByIdentity`**: delete the user's `refresh_tokens` rows and the `auth_sessions_oidc` rows, then revoke (the package does the revoke; the adapter deletes rows).
-6. **Two containers → `/auth/*` matcher is mandatory** (I12, README lesson 4). `internalUrl: http://vibe-payroll-api:4000`.
+6. **Two containers → the engine's paths must be routed to the API tier** (I12, README lesson 4) — ~~as an `/auth/*` matcher~~ **one by one: `/auth/oidc/*`, `/auth/status`, `/auth/me`, `/auth/settings`, `/auth/settings/*`**, because the SPA owns `/auth/magic` and `/auth/reset` (correction 1 above). `internalUrl: http://vibe-payroll-api:4000`.
 7. **CORS.** `parseAllowedOrigins` already accepts the appliance origin; the IdP is never called cross-origin from the browser (redirects only), so no change.
 8. **Break-glass in a tsx-only image**: `breakglassCommand: ["node","--import","tsx/esm","node_modules/@kisaesdevlab/vibe-auth/dist/cli.js","breakglass","ensure","--json"]` with `WORKDIR /app` and the adapter pointed at `backend/src/vibeAuthAdapter.ts` (tsx loads TS). Verify inside the image before committing (README lesson 7).
 
@@ -62,7 +83,9 @@ Variant: **Express + stateless JWT → Trial Balance pattern** (`sid` claim, `#s
   "requires": ["identity"],
   "routing": { "default_upstream": "vibe-payroll-web:8080",
     "matchers": [ { "name": "api", "path": "/api/*", "upstream": "vibe-payroll-api:4000" },
-                  { "name": "auth", "path": "/auth/*", "upstream": "vibe-payroll-api:4000" } ] },
+                  { "name": "auth_oidc", "path": "/auth/oidc/*", "upstream": "vibe-payroll-api:4000" }
+                  /* + auth_status /auth/status, auth_me /auth/me, auth_settings /auth/settings, auth_settings_sub /auth/settings/*
+                     — NOT "/auth/*": correction 1 */ ] },
   "sso": { "capable": true, "redirectPaths": ["/auth/oidc/callback"], "logoutPaths": ["/auth/oidc/backchannel"],
     "publicPaths": ["/api/v1/ping","/api/v1/health","/api/v1/health/ready","/api/v1/version","/api/v1/appliance/info",
                     "/api/v1/setup/*","/api/v1/auth/*","/api/v1/kiosk/*"],
@@ -81,7 +104,7 @@ Variant: **Express + stateless JWT → Trial Balance pattern** (`sid` claim, `#s
 - `both`: password login, magic-link login and SSO login all mint the same token shape; the SPA cannot tell them apart except by the `sid` claim.
 - `oidc_only`: `POST /api/v1/auth/login` refused for everyone but `vibe-breakglass`; `magic/request` refused too (it is a local credential).
 - Kiosk pairing and punches keep working in every mode.
-- LAN box: `sudo vibe identity register vibe-payroll`, then the console's mode switch to `both`, then a sign-in from a browser at `http://<ip>/payroll/`.
+- LAN box: `sudo vibe identity register vibe-payroll`, then the console's mode switch to `both`, then a sign-in from a browser at `http://<ip>/time/`. **Run the product's `/setup` wizard before `identity register`** (correction 2).
 
 ## 4. Risks
 
