@@ -73,6 +73,7 @@ export async function waitForDefaults(ak: Authentik, log: Logger, timeoutMs = 10
       if (!(await ak.defaultBrand())) missing.push("brand");
       for (const slug of REQUIRED_FLOWS) if (!(await ak.flowBySlug(slug))) missing.push(`flow:${slug}`);
       if (!(await ak.validateStageByName(MFA_STAGE_NAME))) missing.push(`stage:${MFA_STAGE_NAME}`);
+      for (const scope of missingStandardScopes(await ak.scopeMappings())) missing.push(`scope-mapping:${scope}`);
     } catch (err) {
       missing.push(`api:${(err as Error).message}`);
     }
@@ -93,13 +94,32 @@ export async function ensureGroups(ak: Authentik): Promise<Record<string, string
   return out;
 }
 
+/**
+ * authentik ships the openid / email / profile scope mappings through one of its own default
+ * blueprints, applied by the worker some time after the API starts answering. Every provider the
+ * broker registers copies the list captured at bootstrap, so a list captured too early is wrong
+ * for the life of the process AND stays wrong inside authentik: without the email mapping the ID
+ * token carries no email and every product sign-in fails with "no_email" until the product is
+ * registered again. (Seen on a fresh CI stack; a fresh appliance install is the same race.)
+ */
+const STANDARD_SCOPES = ["openid", "email", "profile"] as const;
+const standardScopeOf = (m: { managed?: string | null }): string | null => /goauthentik\.io\/providers\/oauth2\/scope-(openid|email|profile)$/.exec(m.managed ?? "")?.[1] ?? null;
+
+export function missingStandardScopes(all: Array<{ managed?: string | null }>): string[] {
+  const have = new Set(all.map(standardScopeOf).filter(Boolean));
+  return STANDARD_SCOPES.filter((s) => !have.has(s));
+}
+
 export async function ensureScopeMapping(ak: Authentik): Promise<string[]> {
   const all = await ak.scopeMappings();
+  const missing = missingStandardScopes(all);
+  // Never cache an incomplete list: throwing makes the bootstrap loop retry in 15 s.
+  if (missing.length) throw new Error(`authentik standard scope mappings not applied yet: ${missing.join(", ")}`);
   let ours = all.find((m) => m.name === SCOPE_MAPPING_NAME);
   if (!ours) ours = await ak.createScopeMapping({ name: SCOPE_MAPPING_NAME, scope_name: "profile", expression: ROLES_EXPRESSION, description: "Vibe Auth groups/roles claims" });
   else if (ours.expression !== ROLES_EXPRESSION) await ak.updateScopeMapping(ours.pk, { expression: ROLES_EXPRESSION });
   // Standard openid/email/profile mappings shipped by authentik (managed names).
-  const std = all.filter((m) => m.managed && /goauthentik\.io\/providers\/oauth2\/scope-(openid|email|profile)$/.test(m.managed)).map((m) => m.pk);
+  const std = all.filter((m) => standardScopeOf(m)).map((m) => m.pk);
   return [...new Set([...std, ours.pk])];
 }
 

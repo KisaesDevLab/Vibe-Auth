@@ -259,6 +259,24 @@ export class Registrations {
     return true;
   }
 
+  /**
+   * Give every registered provider the scope mappings the broker knows now. Run once after
+   * bootstrap: it repairs providers created by a broker that captured the list too early, without
+   * touching secrets, redirect URIs or the product's env. Returns the slugs it repaired.
+   */
+  async repairScopeMappings(): Promise<string[]> {
+    const want = this.boot().scopeMappings;
+    const repaired: string[] = [];
+    for (const reg of await this.list()) {
+      if (!reg.providerPk) continue;
+      const provider = await this.ak.provider(reg.providerPk).catch(() => null);
+      if (!provider || want.every((pk) => provider.property_mappings.includes(pk))) continue;
+      await this.ak.patchProvider(reg.providerPk, { property_mappings: [...new Set([...provider.property_mappings, ...want])] });
+      repaired.push(reg.slug);
+    }
+    return repaired;
+  }
+
   /** Re-derive redirect URIs / launch URLs after a host, routing or base-URL change (D9, §2.3 item 7). */
   async rebase(products: Record<string, string> = {}): Promise<Array<{ slug: string; env: EnvBlock }>> {
     const out: Array<{ slug: string; env: EnvBlock }> = [];
@@ -288,6 +306,10 @@ export class Registrations {
         const have = new Set(provider.redirect_uris.map((u) => u.url));
         for (const u of want) if (!have.has(u)) problems.push(`redirect uri missing: ${u}`);
         if (provider.logout_method !== "backchannel") problems.push("logout method not backchannel");
+        // A provider registered while authentik's default scope mappings were still being applied
+        // has no email claim: every sign-in to that product fails with "no_email".
+        const lacking = this.boot().scopeMappings.filter((pk) => !provider.property_mappings.includes(pk));
+        if (lacking.length) problems.push(`provider is missing ${lacking.length} scope mapping(s) (no email/profile/roles claims); re-register the product to repair`);
       }
       const app = await this.ak.applicationBySlug(reg.slug);
       if (!app) problems.push("application missing in authentik");

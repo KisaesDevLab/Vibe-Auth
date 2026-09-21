@@ -59,7 +59,7 @@ export const schema = z.object({
   VIBE_AUTH_SMTP_FROM: z.string().default("vibe-auth@localhost"),
   VIBE_AUTH_EVENT_POLL_SECONDS: z.coerce.number().int().min(0).default(30),
   VIBE_AUTH_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.6"),
+  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.7"),
 });
 
 export type BrokerConfig = z.infer<typeof schema> & {

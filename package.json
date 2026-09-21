@@ -1,7 +1,7 @@
 {
   "name": "vibe-auth-monorepo",
   "private": true,
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Vibe Auth: SSO/OIDC identity component for the Vibe product family",
   "license": "UNLICENSED",
   "packageManager": "pnpm@9.15.9",

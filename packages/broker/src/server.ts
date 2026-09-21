@@ -189,6 +189,9 @@ export async function main(): Promise<void> {
       try {
         boot = await bootstrapAuthentik(cfg, ak, db, log);
         await setup.init();
+        // Providers registered by a broker that started before authentik's default scope mappings
+        // existed carry no email claim; give them the full list now.
+        await regs.repairScopeMappings().then((r) => r.length && log.warn("repaired scope mappings on registered providers", { slugs: r }), (e: Error) => log.warn("could not check provider scope mappings", { error: e.message }));
         // Re-assert per-product access: bindings deleted by hand in authentik would otherwise leave a restricted product open.
         for (const r of await regs.list()) await access.sync(r).catch((e: Error) => log.warn("could not sync product access", { slug: r.slug, error: e.message }));
         const admin = await buildAdmin({ cfg: () => cfg, db, ak, boot: () => boot!, regs, audit, setup, email, access, log });
