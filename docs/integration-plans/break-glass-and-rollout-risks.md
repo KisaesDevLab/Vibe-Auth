@@ -230,7 +230,35 @@ check. Anchors are in the product repository named in the first column.
 
 ## D. Follow-up work, by owner
 
-Nothing below is done. Order within each list is by how much it would bite.
+### Status, 2026-09-20
+
+Most of this list was built the day after it was written. **Nothing below is merged or released
+except the client package commit on `Vibe-Auth` main**; every other item sits on a pushed branch
+waiting for review.
+
+| Where | Branch | What landed | Tests run |
+|---|---|---|---|
+| `Vibe-Auth` client | `main` (v1.0.6 in `package.json`, **not tagged**, so not on npm) | items 1–5 below | 50 client, 28 broker |
+| `Vibe-Appliance` | `feat/identity-full-management` | items 1, 2, 3 (detect + one-click re-apply), 6, 7, 8 below; Tailscale is refused rather than fixed (4); backup (5) not done | 62 identity, full suite 261/262 (one pre-existing Windows CRLF failure) |
+| Trial Balance | `fix/sso-hardening` | break-glass protected in every mode, no forced change on admin set, SSO-only accounts cannot self-reset (`sso_only_since`), last-admin guard, explicit role map | 339 unit, 18-step e2e |
+| 1099 | `fix/sso-hardening` | bare `vibe-breakglass` accepted at login, protection incl. re-address, SSO-only reset refused, last-admin guard, role map pinned | 178 unit, 19-step e2e |
+| 1040 | `vibe-auth-integration` (PR #1) | guard in every mode, reset refused by rule, readiness command `node dist/auth/breakglass-status.js` | 290 |
+| Tax Research Chat | `feat/sso-vibe-auth` | bare username at login, protection, SSO-only reset refused (`has_local_password`), last-admin guard | 448 api (e2e not run: no database) |
+| Sentinel | `vibe-auth-integration` | address moved off `@localhost`, bare username at login, protection, last-admin guard, rule `SENT-V-AUTH-005` | 257 (nothing database-backed was run) |
+
+Still open after that: the nine products in section B that have not started; Tailscale-mode
+origins; `vibe-auth.env` in a working backup path; per-box console tokens and remote brokers
+(`remote-broker.md`); the three decisions in `../../QUESTIONS.md`. Found along the way and **not**
+fixed: Trial Balance's `PATCH /users/:id` without an `email` field nulls the user's email (the UI's
+Reactivate button does exactly that); its password-reset lookup lets an inactive user match by
+username; Tax Research Chat's login rate limiter has no pass-on-store-error, so a Redis outage
+blocks break-glass too; Sentinel's `Dockerfile.node` runs Node 20 with `--experimental-strip-types`.
+No path forwards a product's own `vibe.auth.breakglass.used` event to the broker: Sentinel sees it
+only through that product's own log shipping.
+
+### The list as written on 2026-09-19
+
+Order within each list is by how much it would bite.
 
 **Client package (`Vibe-Auth/packages/client`)**
 1. Break-glass email default that passes validators (a dotted domain), and compare

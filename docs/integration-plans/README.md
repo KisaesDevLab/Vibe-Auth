@@ -49,7 +49,7 @@ Both were errors in a written plan, caught while implementing. Check them on eve
 | 2 | MyBooks | `mybooks.md` | Express + JWT | 3 h | planned |
 | 3 | AI Router | `vibe-ai-router.md` | Fastify + memory sessions | 2 h | planned |
 | — | **all products** | `break-glass-and-rollout-risks.md` | — | read first | cross-product register: how break-glass behaves in every product, and the Appliance risks that grow with each SSO product (2026-09-19) |
-| 4 | Tax Research Chat | `vibe-tax-research-chat.md` | Express + JWT | 2–3 h | implemented on branch `feat/sso-vibe-auth` (`05def3e`, `57dc67e`); not merged, no pull request yet |
+| 4 | Tax Research Chat | `vibe-tax-research-chat.md` | Express + JWT | 2–3 h | implemented on branch `feat/sso-vibe-auth`, hardened 2026-09-20 (`4f54cd2`, `d3ef860`); not merged, no pull request yet |
 | 5 | 1099 | `vibe-1099.md` | Express + Redis sessions | 2 h | planned |
 | 6 | Entity | `vibe-entity.md` | Express + Postgres sessions | 2 h | planned |
 | 7 | Investments | `vibe-investments.md` | Express + Postgres sessions | 2–3 h | planned |
