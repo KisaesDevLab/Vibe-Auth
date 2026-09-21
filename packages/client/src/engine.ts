@@ -14,7 +14,7 @@ import type {
 import { SINGLE_TENANT } from "./adapters/types.js";
 import { MemoryIdentityStore } from "./adapters/memory.js";
 import { consoleAuditSink, makeAudit, type Audit } from "./audit.js";
-import { AUTH_MODES, loadEnvConfig, loopbackPortPredicate, type AuthMode, type EffectiveConfig, type EnvConfig, type RoleVocabulary } from "./config.js";
+import { AUTH_MODES, defaultBreakglassEmail, loadEnvConfig, loopbackPortPredicate, unmappedDefaultGroups, type AuthMode, type EffectiveConfig, type EnvConfig, type RoleVocabulary } from "./config.js";
 import { discover, type ResolvedProvider } from "./discovery.js";
 import { formBody, header, html, json, parseUrl, redirect, requestOrigin, safeReturnTo, type HttpRequest, type HttpResponse } from "./http.js";
 import { linkOrProvision } from "./identity.js";
@@ -48,6 +48,13 @@ export interface VibeAuthOptions {
   loginPath?: string;
   /** Hidden break-glass local login page (relative to basePath). */
   breakglassLoginPath?: string;
+  /**
+   * The break-glass account's email, for products that sign people in by email. Pass the same
+   * constant the UserAdapter uses. Default: VIBE_BREAKGLASS_EMAIL, else `<username>@vibe-auth.local`.
+   * `localLoginAllowed` and `afterLocalLogin` accept it exactly as they accept the username, so an
+   * email-login product no longer has to map the address back to keep the break-glass audit event.
+   */
+  breakglassEmail?: string;
   /** Public URL override; otherwise derived from VIBE_OIDC_PUBLIC_URL or the request. */
   publicUrl?: string;
   trustProxy?: boolean;
@@ -131,7 +138,12 @@ export class VibeAuth {
     this.env = loadEnvConfig(opts.env ?? process.env);
     this.loopbackPortOk = loopbackPortPredicate(this.env.VIBE_OIDC_LOOPBACK_PORTS);
     this.fetchImpl = opts.fetch ?? fetch;
-    this.cfg = { mode: this.env.VIBE_AUTH_MODE, oidc: null, breakglassUsername: this.env.VIBE_BREAKGLASS_USERNAME };
+    this.cfg = {
+      mode: this.env.VIBE_AUTH_MODE,
+      oidc: null,
+      breakglassUsername: this.env.VIBE_BREAKGLASS_USERNAME,
+      breakglassEmail: (opts.breakglassEmail ?? this.env.VIBE_BREAKGLASS_EMAIL ?? defaultBreakglassEmail(this.env.VIBE_BREAKGLASS_USERNAME)).toLowerCase(),
+    };
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -151,8 +163,27 @@ export class VibeAuth {
         );
       }
     }
+    // A product that relies on the package's default role map gets no role for a group its
+    // vocabulary cannot express (the map no longer guesses). Say so once, at boot.
+    const roles = this.product.roles;
+    if (!roles.defaultRoleMap && !this.env.VIBE_OIDC_ROLE_MAP) {
+      const unmapped = unmappedDefaultGroups(roles.roles, roles.adminRole);
+      if (unmapped.length) this.log.warn("vibe-auth: no product role for these Vibe groups; members get no role from them. Pass product.roles.defaultRoleMap or set VIBE_OIDC_ROLE_MAP.", { unmapped, roles: [...roles.roles] });
+    }
     this.started = true;
-    if (this.cfg.oidc) void this.ensureProvider();
+    if (this.cfg.oidc) this.discovery = this.ensureProvider().then(() => undefined, () => undefined);
+  }
+
+  private discovery: Promise<void> | null = null;
+
+  /**
+   * Resolves once the first discovery attempt has finished (successfully or not); `start()`
+   * deliberately does not wait for it. Returns whether the identity provider is reachable. Use it
+   * before logging "identity provider reachable/unreachable" at boot, and in tests.
+   */
+  async ready(): Promise<boolean> {
+    if (this.discovery) await this.discovery;
+    return !!this.provider;
   }
 
   stop(): void {
@@ -170,6 +201,7 @@ export class VibeAuth {
       vocabulary: this.product.roles,
       secretWrap: this.secretWrap,
       publicBase,
+      breakglassEmail: this.opts.breakglassEmail,
     });
     // Config changed → drop the cached provider so discovery re-runs against the new issuer.
     if (this.provider && this.cfg.oidc && this.provider.issuer !== this.cfg.oidc.issuer) this.provider = null;
@@ -242,18 +274,26 @@ export class VibeAuth {
 
   // ---------------------------------------------------------------- product helpers
 
+  /** Is this login identifier the break-glass account? Matches the username or its email, case-insensitively. */
+  isBreakglassIdentifier(identifier: string | undefined | null): boolean {
+    const id = (identifier ?? "").trim().toLowerCase();
+    return !!id && (id === this.cfg.breakglassUsername.toLowerCase() || id === this.cfg.breakglassEmail);
+  }
+
   /** Products call this from their local login route. */
   localLoginAllowed(identifier: string): { allowed: boolean; reason?: string } {
     if (this.cfg.mode !== "oidc_only") return { allowed: true };
-    const id = identifier.trim().toLowerCase();
-    if (id === this.cfg.breakglassUsername.toLowerCase()) return { allowed: true };
+    if (this.isBreakglassIdentifier(identifier)) return { allowed: true };
     return { allowed: false, reason: "oidc_only" };
   }
 
-  /** Products call this after a successful local login so break-glass use is audited. */
+  /**
+   * Products call this after a successful local login so break-glass use is audited. Either field
+   * may identify the account: an email-login product that passes only `email` used to lose the
+   * event, because only the username was compared.
+   */
   async afterLocalLogin(i: { userId: string; username?: string; email?: string; ip?: string }): Promise<void> {
-    const ident = (i.username ?? i.email ?? "").toLowerCase();
-    if (ident === this.cfg.breakglassUsername.toLowerCase()) {
+    if (this.isBreakglassIdentifier(i.username) || this.isBreakglassIdentifier(i.email)) {
       await this.audit("vibe.auth.breakglass.used", { user_id: i.userId, ip: i.ip });
     }
   }
@@ -507,24 +547,36 @@ export class VibeAuth {
       return fail(linked.reason, messages[linked.reason] ?? "Sign-in was refused.", { sub: claims.sub, email: claims.email });
     }
 
-    await this.audit("vibe.auth.login.success", {
-      user_id: linked.user.id,
-      method: "oidc",
-      issuer: provider.issuer,
-      sub: claims.sub,
-      amr: claims.amr ?? [],
-      ip: req.ip,
-      ua: header(req, "user-agent"),
-      how: linked.how,
-    });
+    const success = () =>
+      this.audit("vibe.auth.login.success", {
+        user_id: linked.user.id,
+        method: "oidc",
+        issuer: provider.issuer,
+        sub: claims.sub,
+        amr: claims.amr ?? [],
+        ip: req.ip,
+        ua: header(req, "user-agent"),
+        how: linked.how,
+      });
 
     if (pending.loopbackPort) {
+      await success();
       const code = this.loopback.issue({ user: linked.user, identity });
       const url = `http://127.0.0.1:${pending.loopbackPort}/callback?code=${encodeURIComponent(code)}`;
       return html(200, loopbackHandoffPage({ url }));
     }
 
-    await this.session.create(req.raw.req as never, req.raw.res as never, linked.user, identity);
+    // The session is the sign-in. A SessionAdapter may legitimately refuse (a product re-checking
+    // amr, a unique-constraint race, a store outage): that is a FAILED login with the normal error
+    // page, not a success row followed by a bare 500 on a top-level navigation.
+    try {
+      await this.session.create(req.raw.req as never, req.raw.res as never, linked.user, identity);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.log.error("vibe-auth: session.create failed", { user_id: linked.user.id, error: reason });
+      return fail("session_failed", "You were identified, but this product could not start your session. Try again, or contact your administrator.", { user_id: linked.user.id, sub: claims.sub, detail: reason.slice(0, 200) });
+    }
+    await success();
     return redirect(pending.returnTo);
   }
 

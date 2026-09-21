@@ -1,6 +1,6 @@
 {
   "name": "@kisaesdevlab/vibe-auth",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Vibe Auth client: shared Express OIDC middleware, adapters, break-glass CLI and React components for Vibe products",
   "license": "UNLICENSED",
   "type": "module",
@@ -60,6 +60,9 @@
     "drizzle-orm": ">=0.34"
   },
   "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    },
     "react": {
       "optional": true
     },

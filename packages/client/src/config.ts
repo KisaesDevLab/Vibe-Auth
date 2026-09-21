@@ -53,6 +53,12 @@ export const envSchema = z.object({
   VIBE_OIDC_CLOCK_TOLERANCE: z.coerce.number().int().min(0).max(300).default(60),
   VIBE_BREAKGLASS_USERNAME: z.string().trim().default("vibe-breakglass"),
   VIBE_BREAKGLASS_PASSWORD: z.string().optional(),
+  /**
+   * Email of the break-glass account, for products that sign people in by email. Must be a
+   * dotted address: most login schemas validate with an email regex that rejects "@localhost".
+   * Default `<username>@vibe-auth.local`. The engine treats it as equivalent to the username.
+   */
+  VIBE_BREAKGLASS_EMAIL: z.string().trim().optional(),
   /** Tauri loopback ports allowed for desktop login: comma list and/or ranges ("49152-65535"). */
   VIBE_OIDC_LOOPBACK_PORTS: z.string().trim().default("49152-65535"),
 });
@@ -94,6 +100,13 @@ export interface EffectiveConfig {
   mode: AuthMode;
   oidc: OidcConfig | null;
   breakglassUsername: string;
+  /** Lower-cased; an identifier equal to this is the break-glass account just as the username is. */
+  breakglassEmail: string;
+}
+
+/** The default break-glass address: dotted, because "@localhost" fails most email validators. */
+export function defaultBreakglassEmail(username: string): string {
+  return `${username}@vibe-auth.local`.toLowerCase();
 }
 
 /** Product role vocabulary and defaults supplied by the integrating product. */
@@ -108,18 +121,34 @@ export interface RoleVocabulary {
 
 export const DEFAULT_VIBE_GROUPS = ["vibe-admin", "vibe-partner", "vibe-manager", "vibe-staff", "vibe-it"] as const;
 
-/** Builds a sensible default role map for a product with the given role vocabulary. */
+/**
+ * Builds a default role map for a product with the given role vocabulary.
+ *
+ * Matching is case-insensitive and returns the product's own spelling. A group with no
+ * matching role is LEFT UNMAPPED — it used to fall back to the least privileged role (and
+ * vibe-partner to the admin role), which silently mis-provisioned people: managers became
+ * read-only in three products and every partner became a super administrator in a fourth.
+ * An unmapped group grants nothing; a JIT sign-in with only unmapped groups is refused with
+ * "no_role". Products whose vocabulary does not match should pass `defaultRoleMap` explicitly;
+ * `unmappedDefaultGroups` tells them which groups need it.
+ */
 export function defaultRoleMapFor(roles: readonly string[], adminRole: string): Record<string, string> {
-  const has = (r: string) => roles.includes(r);
-  const least = roles[roles.length - 1] ?? adminRole;
-  const pick = (...candidates: string[]) => candidates.find(has) ?? least;
-  return {
-    "vibe-admin": adminRole,
-    "vibe-it": adminRole,
-    "vibe-partner": pick("partner", "owner", "admin", adminRole),
-    "vibe-manager": pick("manager", "reviewer", "editor", "user"),
-    "vibe-staff": pick("staff", "preparer", "member", "user", "viewer"),
-  };
+  const byLower = new Map(roles.map((r) => [r.toLowerCase(), r]));
+  const pick = (...candidates: string[]) => candidates.map((c) => byLower.get(c)).find((r): r is string => !!r);
+  const map: Record<string, string> = { "vibe-admin": adminRole, "vibe-it": adminRole };
+  const partner = pick("partner", "owner", "admin");
+  const manager = pick("manager", "reviewer", "editor", "user");
+  const staff = pick("staff", "preparer", "member", "user", "viewer");
+  if (partner) map["vibe-partner"] = partner;
+  if (manager) map["vibe-manager"] = manager;
+  if (staff) map["vibe-staff"] = staff;
+  return map;
+}
+
+/** The standard groups that `defaultRoleMapFor` could not map for this vocabulary. */
+export function unmappedDefaultGroups(roles: readonly string[], adminRole: string): string[] {
+  const map = defaultRoleMapFor(roles, adminRole);
+  return DEFAULT_VIBE_GROUPS.filter((g) => !(g in map));
 }
 
 /** Parses "a,b,c-d" into a predicate over ports. */

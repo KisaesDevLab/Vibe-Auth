@@ -1,6 +1,6 @@
 {
   "name": "@kisaesdevlab/vibe-auth-broker",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "description": "Vibe Auth broker: bootstraps Authentik, registration API, setup wizard, firm admin UI, audit export",
   "license": "UNLICENSED",

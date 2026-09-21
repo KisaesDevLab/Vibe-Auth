@@ -2,7 +2,12 @@
 /**
  * vibe-auth CLI — runs inside a product container.
  *
- *   npx vibe-auth breakglass ensure|rotate|status [--json]
+ *   npx vibe-auth breakglass ensure|rotate|status|verify [--json]
+ *
+ *   status  exists / active / admin / ready + problems (never touches the password)
+ *   verify  reads a password from STDIN and reports whether it still authenticates the account
+ *           (needs UserAdapter.verifyLocalPassword; "checked": false otherwise). Exit code 0 always;
+ *           read the JSON.
  *
  * The product tells the CLI how to reach its users by exporting an adapter
  * module. Resolution order:
@@ -18,7 +23,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { AuditSink, UserAdapter } from "./adapters/types.js";
 import { consoleAuditSink, makeAudit } from "./audit.js";
-import { breakglassEnsure, breakglassRotate, breakglassStatus } from "./breakglass.js";
+import { breakglassEnsure, breakglassRotate, breakglassStatus, breakglassVerify, type BreakglassCheck } from "./breakglass.js";
+import type { VibeUser } from "./adapters/types.js";
 import { loadEnvConfig } from "./config.js";
 
 export interface VibeAuthCliAdapter {
@@ -26,6 +32,12 @@ export interface VibeAuthCliAdapter {
   audit?: AuditSink;
   adminRole: string;
   breakglassEmail?: string;
+  /**
+   * Product-specific readiness for `breakglass status`: is a required second factor enrolled, is the
+   * account locked, would a password change be forced? Without it, status can only report
+   * exists / active / admin.
+   */
+  breakglassCheck?(user: VibeUser): Promise<BreakglassCheck> | BreakglassCheck;
   close?(): Promise<void>;
 }
 
@@ -50,8 +62,16 @@ async function loadAdapter(): Promise<VibeAuthCliAdapter> {
   return a;
 }
 
+/** The password to verify arrives on stdin so it never appears in argv or the environment. */
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) throw new Error("breakglass verify reads the password from stdin: printf '%s' \"$PW\" | vibe-auth breakglass verify");
+  const chunks: Buffer[] = [];
+  for await (const c of process.stdin) chunks.push(Buffer.from(c));
+  return Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+}
+
 function usage(): never {
-  process.stderr.write("usage: vibe-auth breakglass <ensure|rotate|status> [--json]\n");
+  process.stderr.write("usage: vibe-auth breakglass <ensure|rotate|status|verify> [--json]\n");
   process.exit(2);
 }
 
@@ -68,7 +88,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     audit,
     username: env.VIBE_BREAKGLASS_USERNAME,
     adminRole: adapter.adminRole,
-    email: adapter.breakglassEmail,
+    email: adapter.breakglassEmail ?? env.VIBE_BREAKGLASS_EMAIL,
     password: env.VIBE_BREAKGLASS_PASSWORD,
     actor: process.env.VIBE_AUTH_ACTOR ?? "cli",
   };
@@ -77,7 +97,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     let out: Record<string, unknown>;
     if (cmd === "ensure") out = { ...(await breakglassEnsure(common)) };
     else if (cmd === "rotate") out = { ...(await breakglassRotate(common)) };
-    else if (cmd === "status") out = { username: env.VIBE_BREAKGLASS_USERNAME, ...(await breakglassStatus(common)) };
+    else if (cmd === "status") out = { username: env.VIBE_BREAKGLASS_USERNAME, ...(await breakglassStatus({ ...common, check: adapter.breakglassCheck?.bind(adapter) })) };
+    else if (cmd === "verify") out = { username: env.VIBE_BREAKGLASS_USERNAME, ...(await breakglassVerify({ users: adapter.users, username: env.VIBE_BREAKGLASS_USERNAME, password: await readStdin() })) };
     else usage();
 
     if (asJson) process.stdout.write(JSON.stringify(out) + "\n");

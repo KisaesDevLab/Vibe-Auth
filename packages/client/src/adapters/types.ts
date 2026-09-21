@@ -1,5 +1,14 @@
-import type { Request, Response } from "express";
 import type { AuthMode } from "../config.js";
+
+/**
+ * The raw request / response a SessionAdapter receives are whatever the mounted adapter passes:
+ * Express req/res under `vibeAuthExpress`, FastifyRequest/FastifyReply under `vibeAuthFastify`.
+ * They used to be typed as Express objects under every framework, so `res.cookie(...)` type-checked
+ * in a Fastify product and failed at runtime. Annotate your own implementation with your framework's
+ * types: `SessionAdapter<FastifyRequest, FastifyReply>`.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Raw = any;
 
 /**
  * Adapters are the ONLY product-specific surface (D4). A product implements
@@ -45,7 +54,24 @@ export interface UserAdapter {
   findByUsername(username: string): Promise<VibeUser | null>;
   /** JIT provisioning (Phase 3). Return the created user. */
   create(input: CreateUserInput): Promise<VibeUser>;
-  setRole(userId: string, role: string): Promise<void>;
+  /**
+   * Role sync. Return `false` when the product REFUSES the change (for example: it would demote
+   * the last active admin); the engine then keeps the old role and audits the refusal. Returning
+   * nothing means the role was written.
+   */
+  setRole(userId: string, role: string): Promise<void | boolean>;
+  /**
+   * Optional: active admins other than `excludeUserId` and other than the break-glass account.
+   * When implemented, the engine itself refuses a role sync that would demote the last one.
+   */
+  countOtherActiveAdmins?(excludeUserId: string): Promise<number>;
+  /**
+   * Optional: does this plaintext password authenticate the user? Used only by
+   * `vibe-auth breakglass verify` so the Appliance can detect a stored break-glass password that
+   * no longer matches the product database (after a restore). Must not lock the account or count
+   * as a failed attempt.
+   */
+  verifyLocalPassword?(userId: string, password: string): Promise<boolean>;
   /** Break-glass provisioning (D12). Must create an ACTIVE local admin. */
   createLocalUser(input: CreateLocalUserInput): Promise<VibeUser>;
   setLocalPassword(userId: string, password: string): Promise<void>;
@@ -63,15 +89,15 @@ export interface SessionIdentity {
   amr?: string[];
 }
 
-export interface SessionAdapter {
+export interface SessionAdapter<Req = Raw, Res = Raw> {
   /** Establish the product's session for the user after a successful OIDC login. */
-  create(req: Request, res: Response, user: VibeUser, identity: SessionIdentity): Promise<void>;
+  create(req: Req, res: Res, user: VibeUser, identity: SessionIdentity): Promise<void>;
   /** Destroy the current product session (local logout). */
-  destroy(req: Request, res: Response): Promise<void>;
+  destroy(req: Req, res: Res): Promise<void>;
   /** Current user id, if any (for /auth/me, settings API authz). */
-  currentUserId(req: Request): Promise<string | null>;
+  currentUserId(req: Req): Promise<string | null>;
   /** Return the identity stored at create() so logout can pass id_token_hint. */
-  currentIdentity?(req: Request): Promise<SessionIdentity | null>;
+  currentIdentity?(req: Req): Promise<SessionIdentity | null>;
   /**
    * Back-channel logout: destroy every session for this identity (D16).
    * Server-side-store products delete rows; stateless-JWT products should
@@ -175,8 +201,8 @@ export interface AuditSink {
 }
 
 /** D18: single-tenant default only. Present so multi-firm can be added without an API break. */
-export interface TenantResolver {
-  resolve(req: Request): Promise<{ tenantId: string }>;
+export interface TenantResolver<Req = Raw> {
+  resolve(req: Req): Promise<{ tenantId: string }>;
 }
 
 export const SINGLE_TENANT: TenantResolver = { resolve: async () => ({ tenantId: "default" }) };

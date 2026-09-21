@@ -134,7 +134,20 @@ export function AuthSettingsPage(p: AuthSettingsPageProps) {
     try {
       const { url } = await client.testUrl();
       const w = window.open(url, "vibe-auth-test", "width=520,height=720");
-      if (!w) setError("Popup blocked. Allow popups for this site and try again.");
+      if (!w) {
+        setError("Popup blocked. Allow popups for this site and try again.");
+        return;
+      }
+      // The result page reports back with an inline script. A product whose Content-Security-Policy
+      // has no script-src 'unsafe-inline' blocks that script: the test still ran (the server records
+      // it), but no message arrives and the popup never closes itself. So also watch the popup and
+      // re-read the settings, which carry the recorded result, while it is open and once it closes.
+      const started = Date.now();
+      const timer = window.setInterval(() => {
+        const done = w.closed || Date.now() - started > 3 * 60_000;
+        void load();
+        if (done) window.clearInterval(timer);
+      }, 2000);
     } catch (e) {
       setError((e as Error).message);
     }

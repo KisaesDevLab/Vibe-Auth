@@ -38,9 +38,22 @@ export function loggedOutPage(o: { loginPath: string; idpName: string }): string
   return page("Signed out", `<h1>You are signed out</h1><p>Your ${esc(o.idpName)} session and this product's session have ended.</p><a class="btn" href="${esc(o.loginPath)}">Sign in again</a>`);
 }
 
+/**
+ * JSON for embedding inside an inline <script>. JSON.stringify leaves "<", ">" and "&" alone, so a
+ * value containing "</script>" or "<!--" would end the script block, and `message` can carry the
+ * IdP's error_description query parameter verbatim. U+2028/2029 are line terminators in older JS.
+ */
+export function scriptJson(v: unknown): string {
+  const LS = String.fromCharCode(0x2028);
+  const PS = String.fromCharCode(0x2029);
+  const BACKSLASH = String.fromCharCode(0x5c);
+  const escape = (c: string) => BACKSLASH + "u" + c.charCodeAt(0).toString(16).padStart(4, "0");
+  return JSON.stringify(v).replace(new RegExp("[<>&" + LS + PS + "]", "g"), escape);
+}
+
 /** Result page for the Settings "Test connection" popup: posts a message to the opener and closes. */
 export function testResultPage(result: Record<string, unknown>): string {
-  const payload = JSON.stringify({ type: "vibe-auth:test-result", ...result });
+  const payload = scriptJson({ type: "vibe-auth:test-result", ...result });
   const ok = result.ok === true;
   return page(
     ok ? "Connection test passed" : "Connection test failed",
@@ -54,6 +67,6 @@ try{if(window.opener){window.opener.postMessage(${payload},window.location.origi
 export function loopbackHandoffPage(o: { url: string }): string {
   return page(
     "Returning to the desktop app",
-    `<h1>Signed in</h1><p>Returning you to the desktop application…</p><a class="btn" href="${esc(o.url)}">Continue</a><script>location.replace(${JSON.stringify(o.url)})</script>`,
+    `<h1>Signed in</h1><p>Returning you to the desktop application…</p><a class="btn" href="${esc(o.url)}">Continue</a><script>location.replace(${scriptJson(o.url)})</script>`,
   );
 }

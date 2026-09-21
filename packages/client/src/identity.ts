@@ -33,6 +33,27 @@ export type LinkResult =
   | { ok: true; user: VibeUser; how: "linked" | "email" | "jit"; role: string }
   | { ok: false; reason: "no_role" | "unverified_email" | "no_email" | "jit_disabled" | "inactive" };
 
+/**
+ * Write a synced role, unless that would demote the last active admin. Role sync runs on the FIRST
+ * SSO sign-in of an existing local account too; the seeded admin whose IdP groups map lower is the
+ * natural state right after enabling SSO, and demoting it leaves nobody who can open the product's
+ * user admin or its Authentication page. Returns the role the user ends up with.
+ */
+async function syncRole(users: UserAdapter, audit: Audit, user: VibeUser, to: string, source: string, vocabulary: RoleVocabulary): Promise<string> {
+  const demotesAdmin = user.role === vocabulary.adminRole && to !== vocabulary.adminRole;
+  if (demotesAdmin && users.countOtherActiveAdmins && (await users.countOtherActiveAdmins(user.id)) === 0) {
+    await audit("vibe.auth.role.changed", { user_id: user.id, from: user.role, to, source, refused: true, reason: "last_admin" });
+    return user.role;
+  }
+  const applied = await users.setRole(user.id, to);
+  if (applied === false) {
+    await audit("vibe.auth.role.changed", { user_id: user.id, from: user.role, to, source, refused: true, reason: "adapter_refused" });
+    return user.role;
+  }
+  await audit("vibe.auth.role.changed", { user_id: user.id, from: user.role, to, source });
+  return to;
+}
+
 export async function linkOrProvision(users: UserAdapter, identities: IdentityStore, audit: Audit, i: LinkInput): Promise<LinkResult> {
   const now = new Date();
   const email = i.email?.trim().toLowerCase();
@@ -53,11 +74,7 @@ export async function linkOrProvision(users: UserAdapter, identities: IdentitySt
       if (!user.active) return { ok: false, reason: "inactive" };
       await identities.touch(i.issuer, i.subject, now);
       let role = user.role;
-      if (i.syncRoles && resolution.role && resolution.role !== user.role) {
-        await users.setRole(user.id, resolution.role);
-        await audit("vibe.auth.role.changed", { user_id: user.id, from: user.role, to: resolution.role, source: resolution.source });
-        role = resolution.role;
-      }
+      if (i.syncRoles && resolution.role && resolution.role !== user.role) role = await syncRole(users, audit, user, resolution.role, resolution.source, i.vocabulary);
       return { ok: true, user: { ...user, role }, how: "linked", role };
     }
     // Dangling link (user deleted): drop it and fall through.
@@ -74,11 +91,7 @@ export async function linkOrProvision(users: UserAdapter, identities: IdentitySt
     await identities.link({ userId: byEmail.id, issuer: i.issuer, subject: i.subject, email, emailVerified: true, lastLoginAt: now });
     await audit("vibe.auth.user.linked", { user_id: byEmail.id, issuer: i.issuer, sub: i.subject });
     let role = byEmail.role;
-    if (i.syncRoles && resolution.role && resolution.role !== byEmail.role) {
-      await users.setRole(byEmail.id, resolution.role);
-      await audit("vibe.auth.role.changed", { user_id: byEmail.id, from: byEmail.role, to: resolution.role, source: resolution.source });
-      role = resolution.role;
-    }
+    if (i.syncRoles && resolution.role && resolution.role !== byEmail.role) role = await syncRole(users, audit, byEmail, resolution.role, resolution.source, i.vocabulary);
     return { ok: true, user: { ...byEmail, role }, how: "email", role };
   }
 

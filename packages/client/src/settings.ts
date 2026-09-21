@@ -1,5 +1,5 @@
 import type { SecretWrap, SettingsStore, StoredAuthSettings } from "./adapters/types.js";
-import { defaultRoleMapFor, type EffectiveConfig, type EnvConfig, type OidcConfig, type RoleVocabulary } from "./config.js";
+import { defaultBreakglassEmail, defaultRoleMapFor, type EffectiveConfig, type EnvConfig, type OidcConfig, type RoleVocabulary } from "./config.js";
 
 /**
  * Effective config = env defaults overridden by values stored from the
@@ -14,6 +14,8 @@ export interface ResolveInput {
   secretWrap: SecretWrap;
   /** Base for redirect URIs: publicUrl + basePath. May be undefined → derived per request. */
   publicBase?: string;
+  /** The product's break-glass address when it is not the env/default one (VibeAuthOptions.breakglassEmail). */
+  breakglassEmail?: string;
 }
 
 export async function resolveEffectiveConfig(i: ResolveInput): Promise<EffectiveConfig> {
@@ -52,7 +54,7 @@ export async function resolveEffectiveConfig(i: ResolveInput): Promise<Effective
     };
   }
 
-  return { mode, oidc, breakglassUsername: i.env.VIBE_BREAKGLASS_USERNAME };
+  return { mode, oidc, breakglassUsername: i.env.VIBE_BREAKGLASS_USERNAME, breakglassEmail: (i.breakglassEmail ?? i.env.VIBE_BREAKGLASS_EMAIL ?? defaultBreakglassEmail(i.env.VIBE_BREAKGLASS_USERNAME)).toLowerCase() };
 }
 
 /** In-memory settings store (tests, ref-app). Products use createPgStores(). */
