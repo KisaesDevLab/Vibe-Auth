@@ -245,6 +245,7 @@ waiting for review.
 | 1040 | `vibe-auth-integration` (PR #1) | guard in every mode, reset refused by rule, readiness command `node dist/auth/breakglass-status.js` | 290 |
 | Tax Research Chat | `feat/sso-vibe-auth` | bare username at login, protection, SSO-only reset refused (`has_local_password`), last-admin guard | 448 api (e2e not run: no database) |
 | Sentinel | `vibe-auth-integration` | address moved off `@localhost`, bare username at login, protection, last-admin guard, rule `SENT-V-AUTH-005` | 257 (nothing database-backed was run) |
+| Recap | `main` (another session, `3b876b2`) | implemented already hardened: dotted address, absolute CLI path, protection, SSO-only reset refused, last-admin guard, explicit role map. Appliance manifest added on `feat/identity-full-management` (`e861f80`). Not released | read only; its tests were not run here |
 
 Still open after that: the nine products in section B that have not started; Tailscale-mode
 origins; `vibe-auth.env` in a working backup path; per-box console tokens and remote brokers
