@@ -232,6 +232,8 @@ check. Anchors are in the product repository named in the first column.
 
 ### Status, 2026-09-20
 
+**Update, later the same day.** Client and broker are released as **v1.0.7** (v1.0.6 plus a broker start-up fix: on a fresh install the broker could capture authentik's scope mappings before the email mapping existed, and every sign-in then failed with `no_email`). Every branch below now has a pull request with green CI, **none merged**: Appliance #10, Trial Balance #9, 1099 #7, 1040 #1, Tax Research Chat #11, Sentinel #1. Sentinel's also replaces its `file:` dependency on a sibling checkout with the published package and fixes the one test that had kept its main CI red since August. Appliance #9 (Payroll & Time, another session) edits the same manifest validation test as #10; merge one, then rebase the other.
+
 Most of this list was built the day after it was written. **Nothing below is merged or released
 except the client package commit on `Vibe-Auth` main**; every other item sits on a pushed branch
 waiting for review.
