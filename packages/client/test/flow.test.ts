@@ -282,3 +282,67 @@ describe("internal-base rewrite (§2.6)", () => {
     expect(s.oidc.lastError).toMatch(/issuer mismatch/);
   });
 });
+
+describe("step-up re-authentication (1.0.8)", () => {
+  beforeEach(() => boot());
+
+  async function signedIn() {
+    const r = await loginViaBrowser(h.base, "/auth/oidc/start?return_to=/dash");
+    expect(r.location).toBe("/dash");
+    const sid = r.cookies.find((c) => c.startsWith("sid="))!.slice(4);
+    return { cookies: r.cookies, sid };
+  }
+
+  it("re-authenticates at the IdP with prompt=login and refreshes the step-up marker", async () => {
+    const s = await signedIn();
+    expect(h.sessions.stepUps.size).toBe(0);
+    const r = await loginViaBrowser(h.base, "/auth/oidc/start?reauth=1&return_to=/adjustments/9", [...s.cookies]);
+    expect(r.location).toBe("/adjustments/9");
+    const authz = idp.authorizeRequests.at(-1)!;
+    expect(authz.get("prompt")).toBe("login");
+    expect(authz.get("max_age")).toBe("0");
+    expect(h.sessions.stepUps.has(s.sid)).toBe(true);
+    // Still exactly one session, no new cookie, no second login event.
+    expect(h.sessions.store.size).toBe(1);
+    expect(r.cookies.filter((c) => c.startsWith("sid=")).length).toBe(1);
+    expect(h.events.filter((e) => e.type === "vibe.auth.login.success")).toHaveLength(1);
+    const ev = h.events.find((e) => e.type === "vibe.auth.stepup.success") as { user_id?: string; auth_time?: number } | undefined;
+    expect(ev?.user_id).toBe((await h.users.findByEmail("kurt@kisaes.com"))!.id);
+    expect(typeof ev?.auth_time).toBe("number");
+  });
+
+  it("rejects a re-auth whose auth_time is stale", async () => {
+    const s = await signedIn();
+    idp.ignorePromptLogin = true; // the OP silently reuses its session
+    const r = await loginViaBrowser(h.base, "/auth/oidc/start?reauth=1", [...s.cookies]);
+    expect(r.status).toBe(401);
+    expect(h.events.find((e) => e.type === "vibe.auth.login.failure")?.reason).toBe("reauth_stale");
+    expect(h.sessions.stepUps.size).toBe(0);
+    expect(h.sessions.store.size).toBe(1);
+  });
+
+  it("rejects a re-auth as a different IdP account", async () => {
+    const s = await signedIn();
+    idp.user = { ...idp.user, sub: "u-200", email: "someone@else.example" };
+    const r = await loginViaBrowser(h.base, "/auth/oidc/start?reauth=1", [...s.cookies]);
+    expect(r.status).toBe(401);
+    expect(h.events.find((e) => e.type === "vibe.auth.login.failure")?.reason).toBe("reauth_subject_mismatch");
+    expect(h.sessions.stepUps.size).toBe(0);
+    expect(h.users.rows.size).toBe(1); // no provisioning on the re-auth path
+  });
+
+  it("requires an existing session and a product that implements markStepUp", async () => {
+    const anon = await fetch(h.base + "/auth/oidc/start?reauth=1", { redirect: "manual" });
+    expect(anon.status).toBe(401);
+    await h.stop();
+    await idp.stop();
+    idp = await new FakeIdp({ clientId: "ref-client", clientSecret: "s3cret", user: { ...baseUser } }).start();
+    const { MemorySessions } = await import("./harness.js");
+    const sessions = new MemorySessions();
+    (sessions as { markStepUp?: unknown }).markStepUp = undefined;
+    h = await startHarness({ VIBE_AUTH_MODE: "both", VIBE_OIDC_ISSUER: idp.issuer, VIBE_OIDC_CLIENT_ID: "ref-client", VIBE_OIDC_CLIENT_SECRET: "s3cret" }, { session: sessions });
+    const s = await signedIn();
+    const r = await fetch(h.base + "/auth/oidc/start?reauth=1", { redirect: "manual", headers: { cookie: s.cookies.join("; ") } });
+    expect(r.status).toBe(409);
+  });
+});

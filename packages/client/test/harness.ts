@@ -51,6 +51,8 @@ export class MemoryUsers implements UserAdapter {
 export class MemorySessions implements SessionAdapter {
   store = new Map<string, { userId: string; identity: SessionIdentity }>();
   tokens = new Map<string, { userId: string; identity: SessionIdentity }>();
+  /** Step-up markers written by markStepUp (1.0.8), keyed by sid. */
+  stepUps = new Map<string, number>();
   async create(_req: express.Request, res: express.Response, user: VibeUser, identity: SessionIdentity) {
     const sid = "s" + Math.random().toString(36).slice(2);
     this.store.set(sid, { userId: user.id, identity });
@@ -79,6 +81,11 @@ export class MemorySessions implements SessionAdapter {
       }
     }
     return n;
+  }
+  async markStepUp(req: express.Request, _res: express.Response, _user: VibeUser, _identity: SessionIdentity) {
+    const sid = cookie(req, "sid");
+    if (!sid || !this.store.has(sid)) throw new Error("no session to mark");
+    this.stepUps.set(sid, Date.now());
   }
   async issueToken(user: VibeUser, identity: SessionIdentity) {
     const token = "t" + createHash("sha256").update(user.id + Math.random()).digest("hex").slice(0, 16);

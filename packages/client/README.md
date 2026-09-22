@@ -25,6 +25,14 @@ Env (written by the Appliance console after registration): `VIBE_OIDC_ISSUER`, `
 
 Tables: run `sql/auth_identities.sql` in your migrations (or `import { authIdentities, authSettings, authRevocations } from "@kisaesdevlab/vibe-auth/sql/drizzle"`).
 
+Step-up re-authentication (1.0.8): products with a "fresh factor required" gate (large adjustments, payouts) send an SSO
+user to `GET /auth/oidc/start?reauth=1&return_to=<path>` instead of a local TOTP prompt. The engine asks the IdP for a
+fresh sign-in (`prompt=login`, `max_age=0`), checks that the ID token's `auth_time` is recent (`reauthMaxAgeSeconds`,
+default 120) and that its subject is the identity linked to the CURRENT session's user, then calls the optional
+`SessionAdapter.markStepUp(req, res, user, identity)` — refresh your session's step-up timestamp there — and audits
+`vibe.auth.stepup.success`. No session is created on this path; mismatches are `vibe.auth.login.failure` with
+`reason: reauth_stale | reauth_subject_mismatch | reauth_session_changed`. React: `authClient().reauthPath(returnTo)`.
+
 React: `import { LoginPanel, AuthSettingsPage } from "@kisaesdevlab/vibe-auth/react"`.
 CLI: `npx vibe-auth breakglass ensure|rotate|status` (needs `"vibeAuth": { "adapter": "./dist/vibe-auth-adapter.js" }` in package.json).
 Tauri: `import { loopbackLogin } from "@kisaesdevlab/vibe-auth/tauri"`.

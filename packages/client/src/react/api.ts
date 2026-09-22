@@ -80,6 +80,8 @@ export function authClient(o: ClientOptions = {}) {
     saveSettings: (patch: Record<string, unknown>) => req<AuthSettingsDto>("/settings", { method: "PUT", body: JSON.stringify(patch) }),
     testUrl: () => req<{ url: string }>("/settings/test", { method: "POST", body: "{}" }),
     startPath: (returnTo?: string) => `${base}/oidc/start${returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : ""}`,
+    /** Step-up re-authentication at the IdP for the CURRENT session (1.0.8); navigate the whole window here. */
+    reauthPath: (returnTo?: string) => `${base}/oidc/start?reauth=1${returnTo ? `&return_to=${encodeURIComponent(returnTo)}` : ""}`,
     logoutPath: () => `${base}/oidc/logout`,
   };
 }

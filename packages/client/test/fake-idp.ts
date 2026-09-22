@@ -32,6 +32,8 @@ interface PendingCode {
   nonce: string;
   codeChallenge?: string;
   state: string;
+  /** prompt=login was requested: the ID token carries a fresh auth_time. */
+  freshAuth: boolean;
 }
 
 export class FakeIdp {
@@ -45,7 +47,12 @@ export class FakeIdp {
   public user: FakeUser;
   public opts: FakeIdpOptions;
   public tokenRequests: URLSearchParams[] = [];
+  public authorizeRequests: URLSearchParams[] = [];
   public issuerOverride?: string;
+  /** auth_time (seconds) reported when the authorize request did NOT force a fresh login. Default: 1 hour ago. */
+  public sessionAuthTime = Math.floor(Date.now() / 1000) - 3600;
+  /** Set to ignore prompt=login and keep reporting `sessionAuthTime` (a misbehaving OP). */
+  public ignorePromptLogin = false;
 
   constructor(opts: FakeIdpOptions) {
     this.opts = opts;
@@ -145,6 +152,7 @@ export class FakeIdp {
     }
     if (path.endsWith("/authorize/")) {
       const q = url.searchParams;
+      this.authorizeRequests.push(q);
       const redirectUri = q.get("redirect_uri") ?? "";
       const state = q.get("state") ?? "";
       const target = new URL(redirectUri);
@@ -157,7 +165,8 @@ export class FakeIdp {
       if (q.get("client_id") !== this.opts.clientId) return send(400, { error: "unauthorized_client" });
       if (q.get("code_challenge_method") !== "S256") return send(400, { error: "invalid_request", error_description: "PKCE S256 required" });
       const code = randomUUID();
-      this.codes.set(code, { redirectUri, nonce: q.get("nonce") ?? "", codeChallenge: q.get("code_challenge") ?? undefined, state });
+      const freshAuth = !this.ignorePromptLogin && (q.get("prompt") === "login" || q.get("max_age") === "0");
+      this.codes.set(code, { redirectUri, nonce: q.get("nonce") ?? "", codeChallenge: q.get("code_challenge") ?? undefined, state, freshAuth });
       target.searchParams.set("code", code);
       target.searchParams.set("state", state);
       res.writeHead(302, { location: target.toString() });
@@ -185,7 +194,8 @@ export class FakeIdp {
       }
       const accessToken = "at-" + randomUUID();
       this.accessTokens.set(accessToken, this.user.sub);
-      const idToken = await this.signIdToken({ nonce: pc.nonce, accessToken });
+      const authTime = pc.freshAuth ? Math.floor(Date.now() / 1000) : this.sessionAuthTime;
+      const idToken = await this.signIdToken({ nonce: pc.nonce, accessToken, extra: { auth_time: authTime } });
       return send(200, { access_token: accessToken, token_type: "Bearer", expires_in: 300, id_token: idToken, scope: "openid profile email" });
     }
     if (path.endsWith("/userinfo/")) {

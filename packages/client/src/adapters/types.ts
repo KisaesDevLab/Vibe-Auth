@@ -110,6 +110,14 @@ export interface SessionAdapter<Req = Raw, Res = Raw> {
    * store and send on subsequent requests. Optional; only Tauri products need it.
    */
   issueToken?(user: VibeUser, identity: SessionIdentity): Promise<{ token: string; expiresAt?: string }>;
+  /**
+   * Step-up re-authentication (1.0.8): the user just re-authenticated at the IdP
+   * (`/auth/oidc/start?reauth=1` → `prompt=login`, fresh `auth_time`) while holding the
+   * CURRENT product session. Refresh that session's step-up marker (e.g. `lastStepUpAt`);
+   * do not create a new session. Products that implement TOTP-style step-up gates use this
+   * so SSO users re-prove themselves at the IdP instead of enrolling a local factor.
+   */
+  markStepUp?(req: Req, res: Res, user: VibeUser, identity: SessionIdentity): Promise<void>;
 }
 
 /** Revocation list adapter for stateless-JWT products (D16, Phase 3). */
@@ -179,6 +187,7 @@ export interface SecretWrap {
 export type AuditEventType =
   | "vibe.auth.login.success"
   | "vibe.auth.login.failure"
+  | "vibe.auth.stepup.success"
   | "vibe.auth.user.provisioned"
   | "vibe.auth.user.linked"
   | "vibe.auth.role.changed"

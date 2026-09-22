@@ -19,7 +19,7 @@ import { discover, type ResolvedProvider } from "./discovery.js";
 import { formBody, header, html, json, parseUrl, redirect, requestOrigin, safeReturnTo, type HttpRequest, type HttpResponse } from "./http.js";
 import { linkOrProvision } from "./identity.js";
 import { idpUnavailablePage, loggedOutPage, loginErrorPage, loopbackHandoffPage, testResultPage } from "./pages.js";
-import { MemoryExchangeStore, MemoryPendingLoginStore, codeChallengeS256, newPendingLogin, type PendingLoginStore } from "./pkce.js";
+import { MemoryExchangeStore, MemoryPendingLoginStore, codeChallengeS256, newPendingLogin, type PendingLogin, type PendingLoginStore } from "./pkce.js";
 import { amrSatisfiesMfa, resolveRole } from "./roles.js";
 import { MemorySettingsStore, plaintextSecretWrap, resolveEffectiveConfig } from "./settings.js";
 import { exchangeCode, fetchUserInfo, validateIdToken, validateLogoutToken, type IdTokenClaims } from "./tokens.js";
@@ -68,6 +68,11 @@ export interface VibeAuthOptions {
   fetch?: typeof fetch;
   /** Minutes a successful test login stays valid for the oidc_only guard (default 60). */
   testLoginValidityMinutes?: number;
+  /**
+   * Step-up re-authentication (1.0.8): how old the ID token's `auth_time` may be, in seconds,
+   * for `/auth/oidc/start?reauth=1` to count as a fresh re-authentication (default 120).
+   */
+  reauthMaxAgeSeconds?: number;
 }
 
 export interface AuthStatus {
@@ -385,6 +390,18 @@ export class VibeAuth {
       actorId = admin.userId;
     }
 
+    // Step-up re-authentication: the browser must already hold a product session, and the
+    // product must know how to refresh its step-up marker. The callback never creates a
+    // session on this path; it only proves that THIS user re-authenticated just now.
+    const reauth = query.get("reauth") === "1";
+    let reauthUserId: string | undefined;
+    if (reauth) {
+      if (!this.session.markStepUp) return json(409, { error: "reauth_unsupported" });
+      const userId = await this.session.currentUserId(req.raw.req as never);
+      if (!userId) return json(401, { error: "unauthenticated" });
+      reauthUserId = userId;
+    }
+
     let loopbackPort: number | undefined;
     const lp = query.get("loopback_port");
     if (lp) {
@@ -413,6 +430,8 @@ export class VibeAuth {
       test,
       loopbackPort,
       actorId,
+      reauth: reauth || undefined,
+      userId: reauthUserId,
     });
     await this.pending.put(pending);
 
@@ -426,6 +445,11 @@ export class VibeAuth {
     url.searchParams.set("code_challenge", codeChallengeS256(pending.codeVerifier));
     url.searchParams.set("code_challenge_method", "S256");
     if (test) url.searchParams.set("prompt", "login");
+    if (reauth) {
+      // Force a fresh authentication; max_age=0 makes a compliant OP re-prompt AND return auth_time.
+      url.searchParams.set("prompt", "login");
+      url.searchParams.set("max_age", "0");
+    }
     return redirect(url.toString());
   }
 
@@ -493,6 +517,8 @@ export class VibeAuth {
 
     const emailVerified = claims.email_verified === true;
     const identity: SessionIdentity = { issuer: provider.issuer, subject: String(claims.sub), sid: claims.sid, idToken, amr: claims.amr };
+
+    if (pending.reauth) return this.completeReauth(req, pending, claims, identity, fail);
 
     if (pending.test) {
       const resolution = resolveRole({
@@ -577,6 +603,51 @@ export class VibeAuth {
       return fail("session_failed", "You were identified, but this product could not start your session. Try again, or contact your administrator.", { user_id: linked.user.id, sub: claims.sub, detail: reason.slice(0, 200) });
     }
     await success();
+    return redirect(pending.returnTo);
+  }
+
+  // ---------------------------------------------------------------- step-up re-authentication
+
+  /**
+   * Second half of `/auth/oidc/start?reauth=1`. The ID token must carry a recent `auth_time`
+   * and its subject must be the identity already linked to the session's user; then the
+   * product refreshes its step-up marker. Any mismatch is a failed login (no session change).
+   */
+  private async completeReauth(
+    req: HttpRequest,
+    pending: PendingLogin,
+    claims: IdTokenClaims,
+    identity: SessionIdentity,
+    fail: (reason: string, message: string, extra?: Record<string, unknown>) => Promise<HttpResponse>,
+  ): Promise<HttpResponse> {
+    const maxAge = this.opts.reauthMaxAgeSeconds ?? 120;
+    const authTime = typeof claims.auth_time === "number" ? claims.auth_time : undefined;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (authTime === undefined || nowSec - authTime > maxAge + (this.cfg.oidc?.clockTolerance ?? 60)) {
+      return fail("reauth_stale", "The identity provider did not perform a fresh sign-in. Please try again.", { sub: claims.sub, auth_time: authTime });
+    }
+    // The session's user must still be the one who started the re-auth, and the IdP subject
+    // must be that user's linked identity. A different account at the IdP does not count.
+    const currentUserId = await this.session.currentUserId(req.raw.req as never);
+    if (!currentUserId || currentUserId !== pending.userId) {
+      return fail("reauth_session_changed", "Your session changed during re-authentication. Please sign in again.", { sub: claims.sub });
+    }
+    const rec = await this.identities.findByIssuerSubject(identity.issuer, identity.subject);
+    if (!rec || rec.userId !== pending.userId) {
+      return fail("reauth_subject_mismatch", "You re-authenticated as a different account. Please sign in again with your own account.", { sub: claims.sub, user_id: pending.userId });
+    }
+    const user = await this.users.findById(pending.userId);
+    if (!user || !user.active) return fail("inactive", "Your account is disabled.", { user_id: pending.userId });
+    if (!this.session.markStepUp) return json(409, { error: "reauth_unsupported" });
+    try {
+      await this.session.markStepUp(req.raw.req as never, req.raw.res as never, user, identity);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.log.error("vibe-auth: session.markStepUp failed", { user_id: user.id, error: reason });
+      return fail("stepup_failed", "You re-authenticated, but this product could not record it. Try again, or contact your administrator.", { user_id: user.id, detail: reason.slice(0, 200) });
+    }
+    await this.identities.touch(identity.issuer, identity.subject, new Date());
+    await this.audit("vibe.auth.stepup.success", { user_id: user.id, method: "oidc", issuer: identity.issuer, sub: claims.sub, amr: claims.amr ?? [], auth_time: authTime, ip: req.ip });
     return redirect(pending.returnTo);
   }
 

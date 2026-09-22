@@ -15,6 +15,12 @@ export interface PendingLogin {
   loopbackPort?: number;
   /** Actor that initiated a test login (oidc_only guard: test login succeeded in this console session). */
   actorId?: string;
+  /**
+   * Step-up re-authentication (1.0.8): the browser already holds a product session for `userId`;
+   * the callback refreshes that session's step-up marker instead of creating a session.
+   */
+  reauth?: boolean;
+  userId?: string;
 }
 
 export interface PendingLoginStore {
