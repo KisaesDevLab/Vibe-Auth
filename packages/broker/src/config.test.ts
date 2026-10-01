@@ -41,6 +41,15 @@ describe("applyApplianceHints: scheme follows the appliance origin", () => {
     expect(c.authentikPublicBase).toBe("https://auth.firm.com/auth");
   });
 
+  // auth.firm.com/auth/* is proxied to authentik, so a root-served broker's own
+  // /auth/oidc/start answered with authentik's "Not Found".
+  it("a root-served broker keeps its sign-in routes out of authentik's /auth/ mount", () => {
+    const c = loadConfig({ ...base, VIBE_AUTH_BASE_PATH: "/", VIBE_AUTH_APPLIANCE_ORIGIN: "https://auth.firm.com", VIBE_AUTH_APPLIANCE_MODE: "domain:subdomain-per-app" });
+    expect(c.brokerAuthPath).toBe("/broker");
+    expect(rebaseConfig(c, { host: "sso.firm.com" }).brokerAuthPath).toBe("/broker");
+    expect(loadConfig({ ...base, VIBE_AUTH_APPLIANCE_ORIGIN: "https://vibe.firm.com" }).brokerAuthPath).toBe("/vibe-auth");
+  });
+
   // Two appliances under one domain: the operator names (or tags) the host,
   // so the label is no longer guaranteed to be "auth".
   it.each([

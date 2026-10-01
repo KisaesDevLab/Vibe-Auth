@@ -112,10 +112,15 @@ function brokerSessions(db: Db, secure: boolean): SessionAdapter {
 export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready: () => Promise<void> }> {
   const cfg = d.cfg();
   // Self-registration: the broker is an SSO-capable product like any other.
+  // Sign-in routes sit under brokerAuthPath, which differs from the base path only
+  // when a root-served broker shares its host with authentik's /auth/ mount.
+  const base = cfg.VIBE_AUTH_BASE_PATH;
+  const authPath = cfg.brokerAuthPath;
+  const authPublicBase = cfg.brokerPublicBase + authPath.slice(base.length);
   const self = await d.regs.upsert({
     slug: ADMIN_APP_SLUG,
     displayName: `${cfg.VIBE_AUTH_BRAND_NAME} Admin`,
-    baseUrl: cfg.brokerPublicBase,
+    baseUrl: authPublicBase,
     redirectPaths: ["/auth/oidc/callback"],
     logoutPaths: ["/auth/oidc/backchannel"],
     publicPaths: ["/health", "/version", "/registrations", "/rebase", "/setup"],
@@ -131,9 +136,10 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
     identities: stores.identities,
     settings: stores.settings,
     audit: d.audit,
-    basePath: cfg.VIBE_AUTH_BASE_PATH,
+    basePath: authPath,
     loginPath: "/admin",
-    publicUrl: cfg.brokerPublicBase,
+    defaultReturnTo: `${base}/admin`,
+    publicUrl: authPublicBase,
     trustProxy: true,
     env: {
       VIBE_AUTH_MODE: "both",
@@ -149,11 +155,13 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
 
   const router = express.Router();
   router.use(vibeAuthExpress(auth));
+  // The client package's login path and authentik's launch URL point under authPath; the console itself is at base.
+  if (authPath !== base) router.get([authPath, `${authPath}/`, `${authPath}/admin`], (_req, res) => res.redirect(`${base}/admin`));
 
   const requireAdmin: express.RequestHandler = async (req, res, next) => {
     const uid = await auth.session.currentUserId(req);
     const u = uid ? await auth.users.findById(uid) : null;
-    if (!u || !u.active || u.role !== "admin") return res.status(401).json({ error: "unauthenticated", login: `${cfg.VIBE_AUTH_BASE_PATH}/auth/oidc/start?return_to=${encodeURIComponent(cfg.VIBE_AUTH_BASE_PATH + "/admin")}` });
+    if (!u || !u.active || u.role !== "admin") return res.status(401).json({ error: "unauthenticated", login: `${authPath}/auth/oidc/start?return_to=${encodeURIComponent(base + "/admin")}` });
     (req as Request & { admin?: VibeUser }).admin = u;
     next();
   };
@@ -173,7 +181,7 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
       counts: { users: users.length, registrations: regs.length },
       setup,
       mfaRequired: d.boot().mfaRequired,
-      broker: { version: c.VIBE_AUTH_VERSION },
+      broker: { version: c.VIBE_AUTH_VERSION, signOutUrl: `${c.brokerAuthPath}/auth/oidc/logout` },
     });
   });
 

@@ -36,7 +36,7 @@ type Overview = {
   counts: { users: number; registrations: number };
   setup: { done: boolean; completedAt?: string; adminEmail?: string };
   mfaRequired: boolean;
-  broker: { version: string };
+  broker: { version: string; signOutUrl: string };
   email: EmailStatus;
 };
 type EmailStatus = {
@@ -119,7 +119,7 @@ function OverviewPage() {
           </p>
           <div className="row">
             <a href={o.authentik.adminUrl} target="_blank" rel="noreferrer"><button>Open authentik admin</button></a>
-            <a href={`${BASE}/auth/oidc/logout`}><button>Sign out</button></a>
+            <a href={o.broker.signOutUrl}><button>Sign out</button></a>
           </div>
         </div>
         <div className="card">

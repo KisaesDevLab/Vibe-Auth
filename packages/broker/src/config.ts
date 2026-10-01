@@ -59,7 +59,7 @@ export const schema = z.object({
   VIBE_AUTH_SMTP_FROM: z.string().default("vibe-auth@localhost"),
   VIBE_AUTH_EVENT_POLL_SECONDS: z.coerce.number().int().min(0).default(30),
   VIBE_AUTH_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.9"),
+  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.10"),
 });
 
 export type BrokerConfig = z.infer<typeof schema> & {
@@ -69,7 +69,21 @@ export type BrokerConfig = z.infer<typeof schema> & {
   authentikInternalBase: string;
   /** Browser-facing broker base, e.g. https://firm.example/vibe-auth */
   brokerPublicBase: string;
+  /** Path the admin console's own sign-in routes live under: `${brokerAuthPath}/auth/oidc/*`. */
+  brokerAuthPath: string;
 };
+
+/**
+ * The admin console signs in through the client package, whose routes are
+ * `${basePath}/auth/...`. A root-served broker (base path "", the Appliance's
+ * subdomain-per-app mode) would put them at /auth/oidc/*, inside the /auth/*
+ * mount the proxy hands to authentik: the browser got authentik's "Not Found"
+ * and no admin could sign in. Those routes move under /broker there.
+ */
+export function computeBrokerAuthPath(c: z.infer<typeof schema>): string {
+  const collides = (c.VIBE_AUTH_BASE_PATH + "/auth/").startsWith(c.VIBE_AUTH_AUTHENTIK_PATH);
+  return collides ? c.VIBE_AUTH_BASE_PATH + "/broker" : c.VIBE_AUTH_BASE_PATH;
+}
 
 /**
  * authentik always runs with AUTHENTIK_WEB__PATH (default /auth/) so ONE
@@ -134,7 +148,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
       : c.VIBE_AUTH_ROUTING === "port"
         ? `${c.VIBE_AUTH_SCHEME}://${c.VIBE_AUTH_HOST}:${c.VIBE_AUTH_PORT_EXTERNAL}`
         : `${c.VIBE_AUTH_SCHEME}://${c.VIBE_AUTH_HOST}`;
-  return { ...c, authentikPublicBase, authentikInternalBase, brokerPublicBase: brokerHost + c.VIBE_AUTH_BASE_PATH };
+  return { ...c, authentikPublicBase, authentikInternalBase, brokerPublicBase: brokerHost + c.VIBE_AUTH_BASE_PATH, brokerAuthPath: computeBrokerAuthPath(c) };
 }
 
 /** Recompute public bases for /rebase without restarting (host/routing change, D9). */
