@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Routing (COMPAT.md amendment 4 / QUESTIONS Q7):
  *   subpath   → https://{host}/auth/          (Authentik served with AUTHENTIK_WEB__PATH=/auth/) — default
- *   subdomain → https://auth.{host}/          (domain mode, subdomain-per-app)
+ *   subdomain → https://auth.{host}/          (standalone only; the Appliance always uses subpath on the host it renders)
  *   port      → https://{host}:8443/          (original D9 for LAN mode)
  */
 const bool = z.union([z.boolean(), z.string()]).transform((v) => (typeof v === "boolean" ? v : /^(1|true|yes|on)$/i.test(v)));
@@ -27,7 +27,7 @@ export const schema = z.object({
   /**
    * Appliance integration: the app's ALLOWED_ORIGIN and "<mode>:<domain-routing-mode>"
    * as rendered by lib/enable-app.sh. When set, host/scheme/routing are derived
-   * from them (https always; subdomain routing in subdomain-per-app, else subpath).
+   * from the origin (its host and scheme verbatim, subpath routing).
    */
   VIBE_AUTH_APPLIANCE_ORIGIN: z.string().url().optional(),
   VIBE_AUTH_APPLIANCE_MODE: z.string().optional(),
@@ -59,7 +59,7 @@ export const schema = z.object({
   VIBE_AUTH_SMTP_FROM: z.string().default("vibe-auth@localhost"),
   VIBE_AUTH_EVENT_POLL_SECONDS: z.coerce.number().int().min(0).default(30),
   VIBE_AUTH_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.7"),
+  VIBE_AUTH_VERSION: z.string().default(process.env.npm_package_version ?? "1.0.9"),
 });
 
 export type BrokerConfig = z.infer<typeof schema> & {
@@ -101,14 +101,19 @@ export function computePublicBase(c: z.infer<typeof schema>): string {
  * (ERR_SSL_PROTOCOL_ERROR) and every product runs on http. Forcing https here
  * sent every sign-in and setup URL to that dead address. Domain and Tailscale
  * modes render an https origin and keep https.
+ *
+ * The host is the origin's host verbatim, in every mode (1.0.9). The origin
+ * is already the exact host the Appliance serves this app on, so authentik
+ * is always {origin}/auth. Subdomain-per-app used to strip a literal "auth."
+ * and re-add it through `subdomain` routing, which pinned the label: an
+ * operator-named host (auth-office2.firm.com, sso.firm.com — needed when two
+ * appliances share one domain) came out as auth.auth-office2.firm.com.
  */
 export function applyApplianceHints(c: z.infer<typeof schema>): z.infer<typeof schema> {
   if (!c.VIBE_AUTH_APPLIANCE_ORIGIN) return c;
   const u = new URL(c.VIBE_AUTH_APPLIANCE_ORIGIN);
-  const perApp = /subdomain-per-app$/.test(c.VIBE_AUTH_APPLIANCE_MODE ?? "");
-  const host = perApp ? u.host.replace(/^auth\./, "") : u.host;
   const scheme = u.protocol === "http:" ? "http" : "https";
-  return { ...c, VIBE_AUTH_HOST: host, VIBE_AUTH_SCHEME: scheme, VIBE_AUTH_ROUTING: perApp ? "subdomain" : "subpath" };
+  return { ...c, VIBE_AUTH_HOST: u.host, VIBE_AUTH_SCHEME: scheme, VIBE_AUTH_ROUTING: "subpath" };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
@@ -140,6 +145,9 @@ export function rebaseConfig(c: BrokerConfig, patch: { host?: string; routing?: 
     VIBE_AUTH_ROUTING: patch.routing ?? c.VIBE_AUTH_ROUTING,
     VIBE_AUTH_SCHEME: patch.scheme ?? c.VIBE_AUTH_SCHEME,
     VIBE_AUTH_PUBLIC_URL: patch.publicUrl === null ? undefined : (patch.publicUrl ?? c.VIBE_AUTH_PUBLIC_URL),
+    // A root-served broker has base path "" after parsing; loadConfig reads ""
+    // as unset and would fall back to /vibe-auth. "/" round-trips to "".
+    VIBE_AUTH_BASE_PATH: c.VIBE_AUTH_BASE_PATH || "/",
   };
   return loadConfig(Object.fromEntries(Object.entries(next).map(([k, v]) => [k, v === undefined ? undefined : String(v)])) as NodeJS.ProcessEnv);
 }
