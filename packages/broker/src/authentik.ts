@@ -328,9 +328,13 @@ export class Authentik {
     const r = await this.post<{ link: string }>(`/core/users/${pk}/recovery/`, undefined);
     return r.link;
   }
-  /** Ask authentik to email a recovery link through the given email stage. Delivery is asynchronous on authentik's side. */
+  /**
+   * Ask authentik to email a recovery link through the given email stage. Delivery is asynchronous on authentik's side.
+   * authentik 2026.x reads email_stage from the JSON body (a query-only call is a 400 "This field is required");
+   * older releases read the query string, so both carry it.
+   */
   sendRecoveryEmail(pk: number, emailStagePk: string) {
-    return this.request<void>("POST", `/core/users/${pk}/recovery_email/`, undefined, { email_stage: emailStagePk });
+    return this.request<void>("POST", `/core/users/${pk}/recovery_email/`, { email_stage: emailStagePk }, { email_stage: emailStagePk });
   }
   /** All authenticator devices for a user (admin view). */
   devices(userPk: number) {

@@ -519,6 +519,18 @@ async function main() {
   const daveAgain = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, new Jar(), dave);
   check("email: a later sign-in validates an emailed code", new URL(daveAgain.url).pathname === "/ref/api/me" && daveAgain.res.status === 200 && validateSubmits === 1, `${daveAgain.res.status} ${daveAgain.url} codes=${validateSubmits}`);
 
+  // Users page "Email reset link" goes through authentik's recovery_email endpoint and the recovery stage.
+  const davePk = (await json(`${AK}/api/v3/core/users/?username=dave`, { headers: akHeaders })).body.results[0].pk;
+  const mailBefore = (await caught("mail")).length;
+  const reset = await adminApi(`/users/${davePk}/recovery-email`, "POST");
+  check("admin emails a password-reset link", reset.status === 200, `${reset.status} ${JSON.stringify(reset.body)}`);
+  let resetMail;
+  for (let i = 0; i < 30 && !resetMail; i++) {
+    resetMail = (await caught("mail")).slice(mailBefore).find((m) => m.to.includes(dave.email) && /Subject: Reset your password/.test(m.data));
+    if (!resetMail) await sleep(500);
+  }
+  check("the reset email is delivered through the admin-set mail server", !!resetMail);
+
   const smsOff = await adminApi("/mfa/methods/sms", "DELETE");
   const emailOff = await adminApi("/mfa/methods/email", "PUT", { enabled: false });
   check("admin turns both code methods off", smsOff.status === 200 && smsOff.body.sms?.enabled === false && emailOff.status === 200 && emailOff.body.email?.enabled === false);
