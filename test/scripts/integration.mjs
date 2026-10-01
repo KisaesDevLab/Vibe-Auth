@@ -530,6 +530,10 @@ async function main() {
     if (!resetMail) await sleep(500);
   }
   check("the reset email is delivered through the admin-set mail server", !!resetMail);
+  const resetLink = resetMail ? /https?:\/\/[^\s"'<>]+flow_token=[^\s"'<>&]+/.exec(resetMail.data)?.[0] : undefined;
+  check("the emailed reset link points at the public authentik, not the container", !!resetLink && resetLink.startsWith(`${AK}/if/flow/vibe-recovery/`), resetLink);
+  const copied = await adminApi(`/users/${davePk}/recovery-link`, "POST");
+  check("the copyable recovery link points at the public authentik", copied.status === 200 && String(copied.body.link).startsWith(`${AK}/if/flow/vibe-recovery/`), copied.body.link);
 
   const smsOff = await adminApi("/mfa/methods/sms", "DELETE");
   const emailOff = await adminApi("/mfa/methods/email", "PUT", { enabled: false });

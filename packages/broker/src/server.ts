@@ -29,7 +29,7 @@ export async function main(): Promise<void> {
   const persisted = await db.getState<{ host?: string; routing?: BrokerConfig["VIBE_AUTH_ROUTING"]; scheme?: BrokerConfig["VIBE_AUTH_SCHEME"]; publicUrl?: string | null }>("rebase");
   if (persisted) cfg = rebaseConfig(cfg, persisted);
 
-  const ak = new Authentik(cfg.authentikInternalBase, cfg.VIBE_AUTH_AUTHENTIK_TOKEN);
+  const ak = new Authentik(cfg.authentikInternalBase, cfg.VIBE_AUTH_AUTHENTIK_TOKEN, fetch, () => cfg.authentikPublicBase);
   const audit = new BrokerAudit(cfg, db, log);
   const email = new EmailConfig(() => cfg, db, ak, log);
   const mfa = new MfaMethods(db, ak, email, log);

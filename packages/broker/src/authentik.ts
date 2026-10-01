@@ -146,8 +146,20 @@ export class Authentik {
     private base: string,
     private token: string,
     private fetchImpl: typeof fetch = fetch,
+    /**
+     * Public base (e.g. https://auth.example.com/auth). authentik builds the links it hands out or emails
+     * (recovery links, reset mail) from the request host, which is the internal container origin unless
+     * X-Forwarded-Host/Proto say otherwise.
+     */
+    private publicBase?: () => string,
   ) {
     this.base = base.replace(/\/+$/, "");
+  }
+
+  private forwarded(): Record<string, string> {
+    if (!this.publicBase) return {};
+    const u = new URL(this.publicBase());
+    return { "x-forwarded-host": u.host, "x-forwarded-proto": u.protocol.replace(":", "") };
   }
 
   get apiBase(): string {
@@ -162,7 +174,7 @@ export class Authentik {
     try {
       const res = await this.fetchImpl(url, {
         method,
-        headers: { authorization: `Bearer ${this.token}`, accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+        headers: { ...this.forwarded(), authorization: `Bearer ${this.token}`, accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: ctrl.signal,
       });
