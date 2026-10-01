@@ -16,6 +16,9 @@
  *   7b. MFA enforcement off: a user without a device signs in without a code (no lockout)
  *   7c. per-product access: restrict ref-app, a user who is not ticked is stopped at authentik's
  *       authorize endpoint, a ticked user still signs in, verify flags hand-deleted bindings, reopen
+ *   7d. opt-in code methods: an admin signs in to the console, turns on email and SMS codes;
+ *       one user enrols and signs in by text message, another by email (codes read from
+ *       test/catcher); turning the methods off stops their devices being accepted
  *   8. rotate secret, verify, rebase, delete
  * Runs on the host; talks to http://localhost:18080 (Caddy) and to docker compose for restarts.
  */
@@ -38,6 +41,7 @@ const BASE = process.env.VIBE_TEST_BASE ?? "http://localhost:18080";
 const BROKER = `${BASE}/vibe-auth`;
 const AK = `${BASE}/auth`;
 const APP = `${BASE}/ref`;
+const CATCHER = process.env.VIBE_TEST_CATCHER ?? "http://localhost:18025";
 const consoleHeaders = { authorization: `Bearer ${env.CONSOLE_TOKEN}`, "content-type": "application/json" };
 const akHeaders = { authorization: `Bearer ${env.AUTHENTIK_TOKEN}`, "content-type": "application/json", accept: "application/json" };
 
@@ -123,6 +127,28 @@ async function follow(url, jar, maxHops = 12) {
   }
 }
 
+// ---- codes delivered to test/catcher (SMS gateway stand-in + SMTP sink)
+const caught = async (kind) => (await json(`${CATCHER}/${kind === "sms" ? "sms" : "mail"}`)).body ?? [];
+/** Quoted-printable / base64 bodies are decoded just enough to find the code. */
+function mailText(data) {
+  const qp = data.replace(/=\r?\n/g, "").replace(/=([0-9A-F]{2})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)));
+  const b64 = [...data.matchAll(/\r?\n\r?\n([A-Za-z0-9+/=\r\n]{40,})/g)].map((m) => Buffer.from(m[1].replace(/\s+/g, ""), "base64").toString("utf8")).join("\n");
+  return `${qp}\n${b64}`.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ");
+}
+/** The newest code sent to this person after the first `seen` messages; waits for delivery. */
+async function deliveredCode(who, kind, seen) {
+  for (let i = 0; i < 30; i++) {
+    const all = await caught(kind);
+    const mine = all.slice(seen).filter((m) => (kind === "sms" ? m.body?.To === who.phone : (m.to ?? []).includes(who.email)));
+    const last = mine.at(-1);
+    const code = last ? (kind === "sms" ? /\b(\d{6,8})\b/.exec(`${last.body?.Body ?? ""}`)?.[1] : /(?:^|\s)(\d{6,8})(?:\s|$)/.exec(mailText(last.data))?.[1]) : null;
+    if (code) return code;
+    await sleep(1000);
+  }
+  check(`${kind} code delivered to ${kind === "sms" ? who.phone : who.email}`, false, JSON.stringify((await caught(kind)).slice(seen)).slice(0, 300));
+  return "000000";
+}
+
 /**
  * Drive authentik flows through the executor API until the browser would leave authentik.
  * Handles: identification(+password), MFA enrolment (TOTP), MFA validation (TOTP), consent, user-login.
@@ -134,6 +160,7 @@ let validateSubmits = 0;
 /** Each person carries their own TOTP secret (set when they enrol during a run). */
 async function runThroughAuthentik(startUrl, jar, who = user) {
   validateSubmits = 0;
+  if (who.mfa) who.seen = (await caught(who.mfa)).length;
   let current = await follow(startUrl, jar);
   for (let round = 0; round < 6; round++) {
     const m = /\/auth\/if\/flow\/([^/]+)\//.exec(new URL(current.url).pathname);
@@ -181,12 +208,22 @@ async function runThroughAuthentik(startUrl, jar, who = user) {
       else if (comp === "ak-stage-authenticator-validate") {
         const devices = ch.body.device_challenges ?? [];
         const totpDev = devices.find((d) => d.device_class === "totp");
+        const codeDev = who.mfa ? devices.find((d) => d.device_class === who.mfa) : null;
         if (totpDev && who.totpSecret) {
           await freshTotpWindow();
           validateSubmits++;
           ch = await execJson({ component: comp, code: totp(who.totpSecret), selected_challenge: totpDev });
+        } else if (codeDev) {
+          // Picking the device is what makes authentik send the code; the answer is a second submit.
+          const seen = (await caught(who.mfa)).length;
+          await execJson({ component: comp, selected_challenge: codeDev });
+          validateSubmits++;
+          // Without selected_challenge: sending it again would issue a new code and void this one.
+          ch = await execJson({ component: comp, code: await deliveredCode(who, who.mfa, seen) });
         } else if ((ch.body.configuration_stages ?? []).length) {
-          const cfg = ch.body.configuration_stages.find((s) => /totp/i.test(s.name)) ?? ch.body.configuration_stages[0];
+          const wanted = new RegExp(who.mfa ?? "totp", "i");
+          who.offered = ch.body.configuration_stages.map((s) => s.name);
+          const cfg = ch.body.configuration_stages.find((s) => wanted.test(s.name)) ?? ch.body.configuration_stages[0];
           check("MFA enforced: enrolment offered to a user without a device", true, cfg.name);
           ch = await execJson({ component: comp, selected_stage: cfg.pk });
         } else {
@@ -200,6 +237,14 @@ async function runThroughAuthentik(startUrl, jar, who = user) {
         who.totpSecret = secret;
         await freshTotpWindow();
         ch = await execJson({ component: comp, code: totp(secret) });
+      } else if (comp === "ak-stage-authenticator-sms") {
+        if (ch.body.phone_number_required) {
+          who.seen = (await caught("sms")).length;
+          ch = await execJson({ component: comp, phone_number: who.phone });
+        } else ch = await execJson({ component: comp, code: await deliveredCode(who, "sms", who.seen ?? 0) });
+      } else if (comp === "ak-stage-authenticator-email") {
+        if (ch.body.email_required) ch = await execJson({ component: comp, email: who.email });
+        else ch = await execJson({ component: comp, code: await deliveredCode(who, "email", who.seen ?? 0) });
       } else if (comp === "ak-stage-authenticator-static") ch = await execJson({ component: comp });
       else if (comp === "ak-stage-consent") ch = await execJson({ component: comp, token: ch.body.token });
       else if (comp === "ak-stage-user-login") ch = await execJson({ component: comp, remember_me: false });
@@ -355,7 +400,7 @@ async function main() {
   // mfa, so it refuses the login with its MFA page — that page proves authentik let the user through.
   const resetDevices = async (pk) => {
     for (const d of (await json(`${AK}/api/v3/authenticators/admin/all/?user=${pk}`, { headers: akHeaders })).body ?? []) {
-      const kind = /totp/i.test(d.type) ? "totp" : /static/i.test(d.type) ? "static" : null;
+      const kind = /totp/i.test(d.type) ? "totp" : /static/i.test(d.type) ? "static" : /sms/i.test(d.type) ? "sms" : /email/i.test(d.type) ? "email" : null;
       if (kind) await fetch(`${AK}/api/v3/authenticators/admin/${kind}/${d.pk}/`, { method: "DELETE", headers: akHeaders });
     }
   };
@@ -419,6 +464,67 @@ async function main() {
   const jarBob2 = new Jar();
   const bobIn = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jarBob2, bob);
   check("bob signs in once the product is open again", new URL(bobIn.url).pathname === "/ref/api/me" && bobIn.res.status === 200, `${bobIn.res.status} ${bobIn.url}`);
+
+  // 7d. opt-in code methods (broker mfa.ts): email and SMS codes are off until an admin turns them on.
+  const ensureUser = async (who, name) => {
+    let u = (await json(`${AK}/api/v3/core/users/?username=${who.username}`, { headers: akHeaders })).body.results?.find((x) => x.username === who.username);
+    if (u) await resetDevices(u.pk);
+    else u = (await json(`${AK}/api/v3/core/users/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ username: who.username, name, email: who.email, is_active: true, groups: [partner.pk], path: "users" }) })).body;
+    await json(`${AK}/api/v3/core/users/${u.pk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: who.password }) });
+    return u;
+  };
+  const stageNow = async () => (await json(`${AK}/api/v3/stages/authenticator/validate/?name=vibe-mfa-validation`, { headers: akHeaders })).body.results?.[0];
+  const kurt = { username: "kurt@kisaes.com", password: "Correct-Horse-Battery-1", totpSecret: null };
+  const kurtPk = admin.body.results?.[0]?.pk;
+  await resetDevices(kurtPk);
+  await json(`${AK}/api/v3/core/users/${kurtPk}/set_password/`, { method: "POST", headers: akHeaders, body: JSON.stringify({ password: kurt.password }) });
+  const adminJar = new Jar();
+  const adminIn = await runThroughAuthentik(`${BROKER}/auth/oidc/start?return_to=/vibe-auth/admin`, adminJar, kurt);
+  check("the firm admin signs in to the broker's admin console", new URL(adminIn.url).pathname.startsWith("/vibe-auth/admin") && adminIn.res.status === 200, `${adminIn.res.status} ${adminIn.url}`);
+  const adminApi = (path, method = "GET", body) => json(`${BROKER}/api/admin${path}`, { method, headers: { cookie: adminJar.header(), "content-type": "application/json", accept: "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  await adminApi("/mfa/methods/sms", "DELETE");
+  await adminApi("/mfa/methods/email", "PUT", { enabled: false });
+  await adminApi("/email", "DELETE");
+  await fetch(CATCHER, { method: "DELETE" });
+  const off = await adminApi("/mfa/methods");
+  check("code methods are off by default", off.status === 200 && off.body.email?.enabled === false && off.body.sms?.enabled === false, JSON.stringify(off.body));
+  check("default: only app, passkey and recovery-code devices are accepted", JSON.stringify([...((await stageNow())?.device_classes ?? [])].sort()) === JSON.stringify(["static", "totp", "webauthn"]), JSON.stringify((await stageNow())?.device_classes));
+  const noMail = await adminApi("/mfa/methods/email", "PUT", { enabled: true });
+  check("email codes are refused while no mail server is configured", noMail.status === 400, `${noMail.status} ${JSON.stringify(noMail.body)}`);
+  const mailSet = await adminApi("/email", "PUT", { host: "catcher", port: 1025, security: "none", from: "vibe-auth@kisaes.com" });
+  check("admin sets a mail server", mailSet.status === 200, JSON.stringify(mailSet.body).slice(0, 200));
+  const emailOn = await adminApi("/mfa/methods/email", "PUT", { enabled: true });
+  check("admin turns on email codes", emailOn.status === 200 && emailOn.body.email?.enabled === true, `${emailOn.status} ${JSON.stringify(emailOn.body)}`);
+  const smsOn = await adminApi("/mfa/methods/sms", "PUT", { provider: "generic", url: "http://catcher:8025/sms", token: "test-sms-key", from: "VibeTest" });
+  check("admin turns on text message codes", smsOn.status === 200 && smsOn.body.sms?.enabled === true, `${smsOn.status} ${JSON.stringify(smsOn.body)}`);
+  check("the provider key is never returned", !JSON.stringify(smsOn.body).includes("test-sms-key"));
+  const stageOn = await stageNow();
+  check("both code device classes are accepted and both enrolment stages offered", ["sms", "email"].every((c) => stageOn.device_classes.includes(c)) && stageOn.configuration_stages.length === 4, JSON.stringify({ classes: stageOn.device_classes, stages: stageOn.configuration_stages.length }));
+
+  const carol = { username: "carol", password: "Carol-Password-12345", email: "carol@kisaes.com", phone: "+15550100001", mfa: "sms" };
+  await ensureUser(carol, "Carol Sms");
+  const jarCarol = new Jar();
+  const carolIn = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jarCarol, carol);
+  check("enrolment offers the two code methods next to app and passkey", (carol.offered ?? []).some((n) => /sms/i.test(n)) && (carol.offered ?? []).some((n) => /email/i.test(n)), JSON.stringify(carol.offered));
+  check("SMS: first sign-in (enrol a phone, then confirm it) lands on the MFA-requiring product", new URL(carolIn.url).pathname === "/ref/api/me" && carolIn.res.status === 200, `${carolIn.res.status} ${carolIn.url} ${(carolIn.body ?? "").slice(0, 120)}`);
+  const sent = await caught("sms");
+  check("SMS gateway received the code with the bearer key", sent.length >= 1 && sent.every((m) => m.authorization === "Bearer test-sms-key" && m.body?.To === carol.phone), JSON.stringify(sent.at(-1) ?? null).slice(0, 200));
+  const carolAgain = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, new Jar(), carol);
+  check("SMS: a later sign-in validates a texted code", new URL(carolAgain.url).pathname === "/ref/api/me" && carolAgain.res.status === 200 && validateSubmits === 1, `${carolAgain.res.status} ${carolAgain.url} codes=${validateSubmits}`);
+
+  const dave = { username: "dave", password: "Dave-Password-123456", email: "dave@kisaes.com", mfa: "email" };
+  await ensureUser(dave, "Dave Email");
+  const daveIn = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, new Jar(), dave);
+  check("email: first sign-in (enrol, then confirm) lands on the MFA-requiring product", new URL(daveIn.url).pathname === "/ref/api/me" && daveIn.res.status === 200, `${daveIn.res.status} ${daveIn.url} ${(daveIn.body ?? "").slice(0, 120)}`);
+  const daveAgain = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, new Jar(), dave);
+  check("email: a later sign-in validates an emailed code", new URL(daveAgain.url).pathname === "/ref/api/me" && daveAgain.res.status === 200 && validateSubmits === 1, `${daveAgain.res.status} ${daveAgain.url} codes=${validateSubmits}`);
+
+  const smsOff = await adminApi("/mfa/methods/sms", "DELETE");
+  const emailOff = await adminApi("/mfa/methods/email", "PUT", { enabled: false });
+  check("admin turns both code methods off", smsOff.status === 200 && smsOff.body.sms?.enabled === false && emailOff.status === 200 && emailOff.body.email?.enabled === false);
+  const stageOff = await stageNow();
+  check("off again: code devices are no longer accepted, enforcement still on", !stageOff.device_classes.includes("sms") && !stageOff.device_classes.includes("email") && stageOff.configuration_stages.length === 2 && stageOff.not_configured_action === "configure", JSON.stringify({ classes: stageOff.device_classes, stages: stageOff.configuration_stages.length, action: stageOff.not_configured_action }));
+  await adminApi("/email", "DELETE");
 
   // 8. rotate + verify + rebase + delete
   const rot = await json(`${BROKER}/registrations/ref-app/rotate`, { method: "POST", headers: consoleHeaders });

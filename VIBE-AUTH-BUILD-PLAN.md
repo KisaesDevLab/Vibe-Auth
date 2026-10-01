@@ -39,7 +39,7 @@ The design is fixed by the Q&A in §1. Three facts still live in code and are di
 | D20 | No Entra tenant exists. Phase 1 includes creating the Kisaes tenant and a `kisaes-test` tenant (human checkpoint H1). | Q&A |
 | D21 | Phase 7 hardware target: decided at human checkpoint H3 before Phase 7 starts. | Q&A |
 | D22 | Roles: `roles` claim (Entra App Roles) preferred; else groups→role map. Default Authentik groups `vibe-admin`, `vibe-partner`, `vibe-manager`, `vibe-staff`, `vibe-it`. | design |
-| D23 | MFA enforced in bundled Authentik by default (TOTP/WebAuthn); can be disabled only with a logged acknowledgement. | design |
+| D23 | MFA enforced in bundled Authentik by default (TOTP/WebAuthn); can be disabled only with a logged acknowledgement. *Amended 2026-10-01 (v1.0.11, owner decision):* a code by email and a code by text message may be enabled per firm from the admin console; both stay off by default. | design |
 | D24 | Client secrets encrypted at rest in products using each product's existing key-wrap (adapter). | design |
 | D25 | Vibe Auth is the **only** identity provider in the catalog. Sentinel consumes it (its `OIDC_ISSUER` points at Vibe Auth via the client package); Sentinel Core drops its bundled Authentik. Sentinel gains `POST /api/ingest/vibe-auth` + `SENT-V-AUTH-*` rules in Phase 8 step 7. | Q&A 2026-09-16 |
 | D26 | Entra ID federation is **not part of v1**: H1 (tenants) is deferred; the Entra source wizard ships but is untested. Bundled Authentik and Google only for v1. | Q&A 2026-09-16 |

@@ -184,7 +184,9 @@ entries:
     identifiers: { name: vibe-mfa-confirm }
     attrs:
       not_configured_action: skip
-      device_classes: [totp, webauthn, static]
+      # sms / email are listed for the opt-in code methods (broker mfa.ts); nobody holds
+      # such a device unless an admin enabled the method, so they are inert otherwise.
+      device_classes: [totp, webauthn, static, sms, email]
       last_auth_threshold: seconds=0
       webauthn_user_verification: preferred
   - model: authentik_policies_expression.expressionpolicy

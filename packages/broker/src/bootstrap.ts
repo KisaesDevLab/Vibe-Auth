@@ -3,6 +3,7 @@ import type { BrokerConfig } from "./config.js";
 import type { Db } from "./db.js";
 import { EmailConfig } from "./email.js";
 import type { Logger } from "./log.js";
+import { MFA_STAGE_NAME, MfaMethods } from "./mfa.js";
 
 /**
  * Idempotent Authentik bootstrap (Phase 5). Blueprints in deploy/blueprints
@@ -14,7 +15,7 @@ import type { Logger } from "./log.js";
 export const VIBE_GROUPS = ["vibe-admin", "vibe-partner", "vibe-manager", "vibe-staff", "vibe-it"] as const;
 export const AUTH_FLOW_SLUG = "vibe-authentication";
 export const RECOVERY_FLOW_SLUG = "vibe-recovery";
-export const MFA_STAGE_NAME = "vibe-mfa-validation";
+export { MFA_STAGE_NAME };
 export const SCOPE_MAPPING_NAME = "Vibe roles and groups";
 export const ADMIN_APP_SLUG = "vibe-auth-admin";
 
@@ -148,25 +149,6 @@ export async function ensureBaseUrl(cfg: BrokerConfig, ak: Authentik, log: Logge
   return true;
 }
 
-export async function setMfaRequired(ak: Authentik, required: boolean): Promise<boolean> {
-  const stage = await ak.validateStageByName(MFA_STAGE_NAME);
-  if (!stage) return false;
-  // "configure" requires configuration stages; resolve the enrolment stages by name so this
-  // never depends on what the blueprint managed to attach.
-  const setupNames = ["vibe-totp-setup", "vibe-webauthn-setup"];
-  const setup: string[] = [];
-  for (const name of setupNames) {
-    const s = (await ak.stagesByName(name))[0];
-    if (s) setup.push(s.pk);
-  }
-  await ak.patchValidateStage(stage.pk, {
-    not_configured_action: required ? "configure" : "skip",
-    ...(setup.length ? { configuration_stages: setup } : {}),
-    device_classes: ["totp", "webauthn", "static"],
-  });
-  return true;
-}
-
 export async function bootstrapAuthentik(cfg: BrokerConfig, ak: Authentik, db: Db, log: Logger): Promise<BootstrapResult> {
   const version = await waitForAuthentik(ak, log);
   log.info("authentik reachable", { version });
@@ -201,11 +183,13 @@ export async function bootstrapAuthentik(cfg: BrokerConfig, ak: Authentik, db: D
 
   // Outbound mail for password reset: admin-entered SMTP settings live in broker_state and are
   // pushed onto the recovery flow's email stage (authentik's global mail settings are env-only).
-  await new EmailConfig(() => cfg, db, ak, log).apply().catch((e) => log.warn("could not apply email settings to the recovery stage", { error: (e as Error).message }));
+  const email = new EmailConfig(() => cfg, db, ak, log);
+  await email.apply().catch((e) => log.warn("could not apply email settings to the recovery stage", { error: (e as Error).message }));
 
   // MFA enforcement (D23): default on; a logged acknowledgement can turn it off (stored in broker_state).
   const mfaState = (await db.getState<{ required: boolean }>("mfa"))?.required ?? cfg.VIBE_AUTH_MFA_REQUIRED;
-  const applied = await setMfaRequired(ak, mfaState);
+  // Also re-asserts the opt-in email / SMS code methods (mfa.ts) and their delivery settings.
+  const applied = await new MfaMethods(db, ak, email, log).apply(mfaState);
   if (!applied) log.warn("MFA validation stage not found (blueprint not applied yet)");
 
   const cert = await ak.firstCert();

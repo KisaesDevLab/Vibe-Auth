@@ -36,8 +36,15 @@ type Overview = {
   counts: { users: number; registrations: number };
   setup: { done: boolean; completedAt?: string; adminEmail?: string };
   mfaRequired: boolean;
+  mfaMethods: MfaMethods;
   broker: { version: string; signOutUrl: string };
   email: EmailStatus;
+};
+type MfaMethods = {
+  email: { enabled: boolean; deliverable: boolean };
+  sms: { enabled: boolean; provider?: "twilio" | "textlink" | "generic"; accountSid?: string; url?: string; from?: string };
+  updatedAt?: string;
+  updatedBy?: string;
 };
 type EmailStatus = {
   configured: boolean;
@@ -68,6 +75,7 @@ const PAGES = [
   ["products", "Products"],
   ["sources", "Identity sources"],
   ["email", "Email"],
+  ["mfa", "MFA methods"],
   ["audit", "Audit"],
 ] as const;
 type Page = (typeof PAGES)[number][0];
@@ -124,10 +132,11 @@ function OverviewPage() {
         </div>
         <div className="card">
           <h2>Multi-factor authentication</h2>
-          <p className="muted">{o.mfaRequired ? "Every sign-in must complete MFA (TOTP, passkey or security key). Users without a device are asked to enrol one." : "MFA enforcement is DISABLED. Users may sign in with a password only."}</p>
+          <p className="muted">{o.mfaRequired ? `Every sign-in must complete MFA (authenticator app, passkey or security key${o.mfaMethods.sms.enabled ? ", text message code" : ""}${o.mfaMethods.email.enabled ? ", email code" : ""}). Users without a device are asked to enrol one.` : "MFA enforcement is DISABLED. Users may sign in with a password only."}</p>
           <button className={o.mfaRequired ? "danger" : "primary"} disabled={busy} onClick={() => void toggleMfa()}>
             {o.mfaRequired ? "Disable enforcement (logged)" : "Enable enforcement"}
           </button>
+          <p className="muted"><a href={`${BASE}/admin/mfa`}>Choose which methods staff may use</a></p>
         </div>
       </div>
     </>
@@ -436,6 +445,73 @@ function EmailPage() {
   );
 }
 
+function MfaPage() {
+  const { data: st, error, reload } = useLoad(() => api<MfaMethods>("/mfa/methods"));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [provider, setProvider] = useState<"twilio" | "textlink" | "generic">("twilio");
+  useEffect(() => {
+    if (st?.sms.provider) setProvider(st.sms.provider);
+  }, [st]);
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      setMsg({ ok: true, text: await fn() });
+      reload();
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveSms = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const v = (k: string) => String(fd.get(k) ?? "").trim() || undefined;
+    void run(async () => {
+      await api("/mfa/methods/sms", { method: "PUT", body: JSON.stringify({ provider, accountSid: v("accountSid"), url: v("url"), from: v("from"), token: v("token") }) });
+      return "Text message codes are on. Staff can add a phone number the next time they are asked to set up a sign-in method.";
+    });
+  };
+  if (error) return <p role="alert">{error}</p>;
+  if (!st) return <p>Loading…</p>;
+  const sms = st.sms;
+  return (
+    <>
+      <div className="card">
+        <h2>Sign-in methods</h2>
+        <p className="muted">An authenticator app and a passkey or security key are always available. The two methods below are optional and weaker; turn them on only for staff who cannot use the others. Turning a method off stops its codes being accepted, and anyone who used only that method is asked to set up another at their next sign-in.</p>
+        {msg && <p className={msg.ok ? "muted" : ""} role={msg.ok ? undefined : "alert"} style={msg.ok ? undefined : { color: "#dc2626" }}>{msg.text}</p>}
+      </div>
+      <div className="card">
+        <h2>Code by email <span className={`pill ${st.email.enabled ? "ok" : "bad"}`}>{st.email.enabled ? "on" : "off"}</span></h2>
+        <p className="muted">Sends a one-time code to the user's own address through the mail server on the Email page. Password-reset mail goes to the same mailbox, so anyone who can read a person's email can sign in as them.</p>
+        {!st.email.deliverable && <p className="muted">Outbound email is not configured. <a href={`${BASE}/admin/email`}>Set up a mail server</a> first.</p>}
+        <button className={st.email.enabled ? "danger" : "primary"} disabled={busy || (!st.email.enabled && !st.email.deliverable)} onClick={() => void run(async () => { await api("/mfa/methods/email", { method: "PUT", body: JSON.stringify({ enabled: !st.email.enabled }) }); return st.email.enabled ? "Email codes are off." : "Email codes are on."; })}>
+          {st.email.enabled ? "Turn off email codes" : "Turn on email codes"}
+        </button>
+      </div>
+      <div className="card">
+        <h2>Code by text message <span className={`pill ${sms.enabled ? "ok" : "bad"}`}>{sms.enabled ? `on · ${sms.provider}` : "off"}</span></h2>
+        <p className="muted">Sends a one-time code to the user's mobile number through your SMS provider. Each message is billed by the provider.</p>
+        <form onSubmit={saveSms} className="grid2" key={`${sms.provider ?? "new"}:${st.updatedAt ?? ""}`}>
+          <label>Provider<select value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}><option value="twilio">Twilio</option><option value="textlink">TextLink</option><option value="generic">Other (HTTP gateway)</option></select></label>
+          {provider === "twilio" && <label>Account SID<input name="accountSid" required defaultValue={sms.provider === "twilio" ? sms.accountSid ?? "" : ""} placeholder="AC…" autoComplete="off" /></label>}
+          {provider !== "twilio" && <label>{provider === "textlink" ? "TextLink API base URL" : "Gateway URL"}<input key={provider} name="url" type="url" required defaultValue={sms.provider === provider ? sms.url ?? "" : provider === "textlink" ? "https://textlinksms.com" : ""} autoComplete="off" /></label>}
+          {provider !== "textlink" && <label>{provider === "twilio" ? "From number or Messaging Service SID" : "From"}<input key={provider} name="from" required defaultValue={sms.provider === provider ? sms.from ?? "" : ""} placeholder="+15551234567" autoComplete="off" /></label>}
+          <label>{provider === "twilio" ? "Auth token" : "API key"}{sms.provider === provider ? " (blank keeps the saved one)" : ""}<input name="token" type="password" autoComplete="new-password" /></label>
+          <div className="row">
+            <button className="primary" type="submit" disabled={busy}>{sms.enabled ? "Save" : "Turn on text message codes"}</button>
+            {sms.enabled && <button className="danger" type="button" disabled={busy} onClick={() => window.confirm("Turn off text message codes? The saved provider key is removed.") && void run(async () => { await api("/mfa/methods/sms", { method: "DELETE" }); return "Text message codes are off."; })}>Turn off</button>}
+          </div>
+        </form>
+        <p className="muted">{provider === "generic" ? "The gateway receives a JSON POST with From, To, Body and Message, and the API key as a Bearer token." : "The key is stored encrypted with the broker key and handed to authentik; it is never shown again."}</p>
+      </div>
+    </>
+  );
+}
+
 function AuditPage() {
   const [type, setType] = useState("");
   const { data: events, error } = useLoad(() => api<Audit[]>(`/audit?limit=300${type ? `&type=${encodeURIComponent(type)}` : ""}`), [type]);
@@ -488,6 +564,7 @@ function App() {
         {page === "products" && <ProductsPage />}
         {page === "sources" && <SourcesPage />}
         {page === "email" && <EmailPage />}
+        {page === "mfa" && <MfaPage />}
         {page === "audit" && <AuditPage />}
       </main>
     </>

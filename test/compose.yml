@@ -94,6 +94,15 @@ services:
       postgres: { condition: service_healthy }
     networks: [vibe_net]
 
+  # Sink for the MFA code methods: SMTP on 1025, a stand-in SMS gateway on 8025 (test/catcher/server.mjs).
+  catcher:
+    image: node:20-alpine
+    command: ["node", "/catcher/server.mjs"]
+    ports: ["18025:8025"]
+    volumes:
+      - ./catcher:/catcher:ro
+    networks: [vibe_net]
+
   caddy:
     image: caddy:2-alpine
     ports: ["18080:8080"]

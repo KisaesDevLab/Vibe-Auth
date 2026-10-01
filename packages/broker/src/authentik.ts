@@ -247,6 +247,28 @@ export class Authentik {
   patchEmailStage(pk: string, body: Record<string, unknown>) {
     return this.patch<AkEmailStage>(`/stages/email/${pk}/`, body);
   }
+  /** Enrolment stages for the optional email / SMS code factors (mfa.ts). */
+  async authenticatorStageByName(kind: "email" | "sms", name: string): Promise<(AkStage & Record<string, unknown>) | null> {
+    const r = await this.get<Paginated<AkStage & Record<string, unknown>>>(`/stages/authenticator/${kind}/`, { name });
+    return r.results[0] ?? null;
+  }
+  createAuthenticatorStage(kind: "email" | "sms", body: Record<string, unknown>) {
+    return this.post<AkStage>(`/stages/authenticator/${kind}/`, body);
+  }
+  patchAuthenticatorStage(kind: "email" | "sms", pk: string, body: Record<string, unknown>) {
+    return this.patch<AkStage>(`/stages/authenticator/${kind}/${pk}/`, body);
+  }
+  /** Webhook mappings shape the JSON a generic SMS gateway receives. */
+  async webhookMappingByName(name: string): Promise<{ pk: string; name: string; expression: string } | null> {
+    const r = await this.get<Paginated<{ pk: string; name: string; expression: string }>>("/propertymappings/notification/", { name });
+    return r.results[0] ?? null;
+  }
+  createWebhookMapping(body: { name: string; expression: string }) {
+    return this.post<{ pk: string; name: string; expression: string }>("/propertymappings/notification/", body);
+  }
+  updateWebhookMapping(pk: string, body: { expression: string }) {
+    return this.patch<{ pk: string }>(`/propertymappings/notification/${pk}/`, body);
+  }
   async certByName(name: string): Promise<AkCert | null> {
     const r = await this.get<Paginated<AkCert>>("/crypto/certificatekeypairs/", { name });
     return r.results[0] ?? null;

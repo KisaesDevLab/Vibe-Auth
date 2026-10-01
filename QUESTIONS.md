@@ -4,6 +4,8 @@ All items were answered in the Q&A session of 2026-09-16 and folded into the bui
 
 ## Open
 
+- **Email / SMS codes and regulated products** (raised 2026-10-01, v1.0.11) — D23 was amended to let a firm admin turn on a code by email and a code by text message. Both are weaker than TOTP/WebAuthn (email shares the password-reset mailbox; SMS is open to SIM swap), and authentik reports either as plain `mfa` in `amr`, so a product cannot tell them from an authenticator app. Decide whether products with a stricter bar (1040 declined a password-only break-glass on GLBA grounds) need a way to refuse these factors, e.g. an `acr`/claim that names the device class.
+
 - **H1 (Entra tenants)** — deferred, not part of v1 (D26). `docs/entra-setup.md` stays ready.
 - **H3 (Phase 7)** — bare-metal box on the office LAN, run by the human with `test/scripts/phase7.sh` (D30, `docs/phase7-checklist.md`). Results to be pasted into `STATE.md`.
 - **H4** — runbooks in `docs/firm/runbooks.md` still need execution by a non-author.

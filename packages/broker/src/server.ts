@@ -12,6 +12,7 @@ import { loadConfig, rebaseConfig, type BrokerConfig } from "./config.js";
 import { Db } from "./db.js";
 import { EmailConfig } from "./email.js";
 import { createLogger } from "./log.js";
+import { MfaMethods } from "./mfa.js";
 import { NotFound, registrationInput, Registrations } from "./registrations.js";
 import { Setup, setupDonePage, setupPage } from "./setup.js";
 
@@ -31,6 +32,7 @@ export async function main(): Promise<void> {
   const ak = new Authentik(cfg.authentikInternalBase, cfg.VIBE_AUTH_AUTHENTIK_TOKEN);
   const audit = new BrokerAudit(cfg, db, log);
   const email = new EmailConfig(() => cfg, db, ak, log);
+  const mfa = new MfaMethods(db, ak, email, log);
   const setup = new Setup(cfg, db, ak, log, email);
   let boot: BootstrapResult | null = null;
   let bootError: string | null = null;
@@ -194,7 +196,7 @@ export async function main(): Promise<void> {
         await regs.repairScopeMappings().then((r) => r.length && log.warn("repaired scope mappings on registered providers", { slugs: r }), (e: Error) => log.warn("could not check provider scope mappings", { error: e.message }));
         // Re-assert per-product access: bindings deleted by hand in authentik would otherwise leave a restricted product open.
         for (const r of await regs.list()) await access.sync(r).catch((e: Error) => log.warn("could not sync product access", { slug: r.slug, error: e.message }));
-        const admin = await buildAdmin({ cfg: () => cfg, db, ak, boot: () => boot!, regs, audit, setup, email, access, log });
+        const admin = await buildAdmin({ cfg: () => cfg, db, ak, boot: () => boot!, regs, audit, setup, email, mfa, access, log });
         adminRouter = admin.router;
         await admin.ready();
         stopForwarder = startEventForwarder(cfg, ak, db, audit, log);

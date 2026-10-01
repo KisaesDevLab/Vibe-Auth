@@ -6,12 +6,13 @@ import type { AppAccess } from "./access.js";
 import type { Authentik } from "./authentik.js";
 import { AuthentikError } from "./authentik.js";
 import type { BootstrapResult } from "./bootstrap.js";
-import { ADMIN_APP_SLUG, setMfaRequired, VIBE_GROUPS } from "./bootstrap.js";
+import { ADMIN_APP_SLUG, VIBE_GROUPS } from "./bootstrap.js";
 import type { BrokerConfig } from "./config.js";
 import type { Db, Row } from "./db.js";
 import type { BrokerAudit } from "./audit.js";
 import { emailSettingsInput, RECOVERY_EMAIL_STAGE, type EmailConfig } from "./email.js";
 import { SmtpError } from "./smtp.js";
+import { MfaConfigError, smsSettingsInput, type MfaMethods } from "./mfa.js";
 import type { Registrations } from "./registrations.js";
 import type { Setup } from "./setup.js";
 import type { Logger } from "./log.js";
@@ -31,6 +32,7 @@ export interface AdminDeps {
   audit: BrokerAudit;
   setup: Setup;
   email: EmailConfig;
+  mfa: MfaMethods;
   access: AppAccess;
   log: Logger;
 }
@@ -181,6 +183,7 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
       counts: { users: users.length, registrations: regs.length },
       setup,
       mfaRequired: d.boot().mfaRequired,
+      mfaMethods: await d.mfa.status(),
       broker: { version: c.VIBE_AUTH_VERSION, signOutUrl: `${c.brokerAuthPath}/auth/oidc/logout` },
     });
   });
@@ -316,11 +319,14 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
 
   // Outbound email (SMTP) for the recovery flow.
   api.get("/email", async (_req, res) => res.json(await d.email.status()));
+  // The email-code MFA stage uses the same mail server as password reset; keep it in step.
+  const resyncMfa = () => d.mfa.apply(d.boot().mfaRequired).catch((e: Error) => d.log.warn("could not re-apply MFA methods after an email change", { error: e.message }));
   api.put("/email", async (req, res) => {
     const parsed = emailSettingsInput.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") });
     try {
       const applied = await d.email.save(parsed.data, actor(req));
+      await resyncMfa();
       d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "email_updated", host: parsed.data.host, port: parsed.data.port, security: parsed.data.security, actor: actor(req) });
       res.json({ ok: true, applied, status: await d.email.status() });
     } catch (e) {
@@ -329,6 +335,7 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
   });
   api.delete("/email", async (req, res) => {
     const applied = await d.email.clear();
+    await resyncMfa();
     d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "email_cleared", actor: actor(req) });
     res.json({ ok: true, applied, status: await d.email.status() });
   });
@@ -417,11 +424,46 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
     const b = req.body as { required?: boolean; ack?: boolean };
     const required = b.required !== false;
     if (!required && b.ack !== true) return res.status(400).json({ error: "disabling MFA enforcement requires ack: true" });
-    const applied = await setMfaRequired(d.ak, required);
+    const applied = await d.mfa.apply(required);
     await d.db.setState("mfa", { required, ackBy: actor(req), at: new Date().toISOString() });
     d.boot().mfaRequired = required;
     d.audit.emit({ type: required ? "vibe.auth.settings.changed" : "vibe.auth.mfa.enforcement.disabled", at: new Date().toISOString(), what: "mfa_required", required, actor: actor(req) });
     res.json({ ok: true, applied, required });
+  });
+
+  // Opt-in second factors: a code by email, a code by text message (mfa.ts).
+  const mfaError = (res: Response, e: unknown) =>
+    res.status(e instanceof MfaConfigError ? 400 : e instanceof AuthentikError ? e.status : 500).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
+  api.get("/mfa/methods", async (_req, res) => res.json(await d.mfa.status()));
+  api.put("/mfa/methods/email", async (req, res) => {
+    const enabled = (req.body as { enabled?: boolean }).enabled === true;
+    try {
+      await d.mfa.setEmail(enabled, actor(req), d.boot().mfaRequired);
+      d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: enabled ? "mfa_email_enabled" : "mfa_email_disabled", actor: actor(req) });
+      res.json(await d.mfa.status());
+    } catch (e) {
+      mfaError(res, e);
+    }
+  });
+  api.put("/mfa/methods/sms", async (req, res) => {
+    const parsed = smsSettingsInput.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") });
+    try {
+      await d.mfa.setSms(parsed.data, actor(req), d.boot().mfaRequired);
+      d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "mfa_sms_enabled", provider: parsed.data.provider, actor: actor(req) });
+      res.json(await d.mfa.status());
+    } catch (e) {
+      mfaError(res, e);
+    }
+  });
+  api.delete("/mfa/methods/sms", async (req, res) => {
+    try {
+      await d.mfa.setSms(null, actor(req), d.boot().mfaRequired);
+      d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "mfa_sms_disabled", actor: actor(req) });
+      res.json(await d.mfa.status());
+    } catch (e) {
+      mfaError(res, e);
+    }
   });
 
   // An install that configured a source before v1.0.5 has the older mapping expression; repair it in place.
