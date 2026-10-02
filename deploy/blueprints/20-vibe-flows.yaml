@@ -231,9 +231,12 @@ entries:
     identifiers: { target: !KeyOf auth-flow, stage: !KeyOf login, order: 30 }
 
   # ---------------------------------------------------------------- brand: use our flows (title is set by the setup wizard)
+  # default: true — authentik's own default-brand blueprint is state: created, so when this entry
+  # creates the brand first it is never flagged default and requests on any host get an empty brand.
   - model: authentik_brands.brand
     state: present
     identifiers: { domain: authentik-default }
     attrs:
+      default: true
       flow_authentication: !KeyOf auth-flow
       flow_recovery: !KeyOf recovery-flow

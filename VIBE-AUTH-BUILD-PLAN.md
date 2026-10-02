@@ -47,6 +47,9 @@ The design is fixed by the Q&A in §1. Three facts still live in code and are di
 | D28 | `oidc_only` guard is split: the console requires a stored break-glass password; the product's Settings → Authentication page additionally requires a successful Test connection within 60 minutes by the same admin. | Q&A 2026-09-16 |
 | D29 | LAN-mode internal CA is not distributed in v1 (per-device click-through, as for products). MyBooks `user_type='client'` rows are denied SSO (D5). Default role maps as in `docs/integration-checklist.md`. Tauri desktop login uses `@fabianlars/tauri-plugin-oauth`. | Q&A 2026-09-16 |
 | D30 | Phase 7 runs on a bare-metal box on the office LAN, executed by the human with `test/scripts/phase7.sh`; results pasted back. Follow-up scope accepted: restore ordering in Vibe Backup (separate PR). | Q&A 2026-09-16 |
+| D31 | A code by email or by text message counts as MFA everywhere. Products get no way to refuse those factors; a firm that needs authenticator-app or passkey only leaves both off (D23). The weaker factors are a firm-admin choice, documented in the firm guide. | Q&A 2026-10-02 |
+| D32 | `vibe-it` (IT staff) maps to each product's **administrator** role, as `defaultRoleMapFor()` already does; the earlier "no product access" wording was a documentation error. Per-product access (restrict a product, do not tick IT staff) is how a firm keeps IT out of a product. | Q&A 2026-10-02 |
+| D33 | D12 sets no suite-wide second-factor rule for break-glass: each product's integration plan states whether its break-glass account is password-only or enrols TOTP at provisioning (today: Trial Balance and 1099 password-only, 1040 TOTP, Time & Billing must provision a factor). In scope: the Appliance verifies a stored break-glass credential actually signs in, not only that one is stored. Tailscale-mode SSO and directory-driven app access stay out of scope until a firm asks. | Q&A 2026-10-02 |
 
 ---
 

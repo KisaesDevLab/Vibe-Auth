@@ -1,20 +1,26 @@
 # QUESTIONS.md
 
-All items were answered in the Q&A session of 2026-09-16 and folded into the build plan as D25–D30. Kept for the record.
+The Q&A session of 2026-09-16 was folded into the build plan as D25–D30, and the session of 2026-10-02 as D31–D33. Kept for the record.
 
 ## Open
-
-- **Email / SMS codes and regulated products** (raised 2026-10-01, v1.0.11) — D23 was amended to let a firm admin turn on a code by email and a code by text message. Both are weaker than TOTP/WebAuthn (email shares the password-reset mailbox; SMS is open to SIM swap), and authentik reports either as plain `mfa` in `amr`, so a product cannot tell them from an authenticator app. Decide whether products with a stricter bar (1040 declined a password-only break-glass on GLBA grounds) need a way to refuse these factors, e.g. an `acr`/claim that names the device class.
 
 - **H1 (Entra tenants)** — deferred, not part of v1 (D26). `docs/entra-setup.md` stays ready.
 - **H3 (Phase 7)** — bare-metal box on the office LAN, run by the human with `test/scripts/phase7.sh` (D30, `docs/phase7-checklist.md`). Results to be pasted into `STATE.md`.
 - **H4** — runbooks in `docs/firm/runbooks.md` still need execution by a non-author.
 - **Follow-up: restore ordering in Vibe Backup** (separate PR in `Vibe-Backup`: ordering field in the contract + multi-module restore).
-- **What should `vibe-it` mean inside products?** (raised 2026-09-19, v1.0.5) — The firm guide and the `10-vibe-groups.yaml` description said "Vibe Auth administration only, no product access", but `defaultRoleMapFor()` in `packages/client/src/config.ts` maps `vibe-it` to each product's **administrator** role and every plan under `docs/integration-plans/` repeats that. Nothing ever enforced "no product access"; D22 only lists the group. Decide: (a) IT staff are product administrators and the old wording was a documentation error (the guide now says this), or (b) drop `vibe-it` from the default role map (client package change, twelve integration plans, behaviour change for anyone relying on it). Until decided, per-product access gives firms the practical control: restrict a product and do not tick IT staff.
-- **Directory-driven app access** (raised 2026-09-19) — v1.0.5 assigns apps per user in the console only. Letting Entra/Google group names drive `vibe-app-<slug>` membership is possible but must be all-or-nothing per product, because a source-linked group is stripped from federated users whose directory does not send it. Not built; ask if a firm wants it.
-- **What does D12 mean for a second factor?** (raised 2026-09-19) — D12 says nothing about MFA. Trial Balance and 1099 provision a password-only break-glass account; 1040's operator declined that (GLBA) and requires TOTP; Time & Billing's mandatory second factor leaves a factor-less break-glass account unable to sign in at all. Decide: one suite-wide rule (password-only, or TOTP enrolled at provisioning), or a per-product policy that each plan must state. See `docs/integration-plans/break-glass-and-rollout-risks.md` §B.
-- **Must the Appliance verify break-glass, not just store a password?** (raised 2026-09-19) — Today the `oidc_only` guard, the console pill and `identity status` test only for a non-empty `VIBE_BREAKGLASS_PASSWORD_<SLUG>`; a product database restore silently breaks the pair and nothing notices. Register §A and §D.
-- **Is Tailscale-mode SSO in scope?** (raised 2026-09-19) — It cannot work today: origins render as `http://<default-route-ip>` while the browser is on the tailnet HTTPS name, so sign-in fails on redirect mismatch. Register §C item 5.
+- **Follow-up: the Appliance verifies break-glass** (D33) — the `oidc_only` guard, the console pill and `identity status` should prove the stored `VIBE_BREAKGLASS_PASSWORD_<SLUG>` signs in, so a product database restore that breaks the pair is caught. Not built yet; lands in `Vibe-Appliance`. Register §A and §D.
+- **Follow-up: per-product break-glass factor** (D33) — each plan under `docs/integration-plans/` must state password-only or TOTP at provisioning; Time & Billing's plan must provision a factor.
+
+## Answered 2026-10-02
+
+| Question | Decision |
+|---|---|
+| Email / SMS codes and regulated products | **Treated as MFA**; no product-side refusal. A firm that needs app/passkey only leaves both off (D31) |
+| What should `vibe-it` mean inside products? | **Product administrators**; the "no product access" wording was a documentation error (D32) |
+| What does D12 mean for a second factor? | **Per-product policy** stated in each integration plan (D33) |
+| Must the Appliance verify break-glass, not just store a password? | **Yes, in scope** — follow-up above (D33) |
+| Is Tailscale-mode SSO in scope? | **Not now**; revisit if a firm asks (D33) |
+| Directory-driven app access | **Not now**; revisit if a firm asks (D33) |
 
 ## Answered 2026-09-16
 

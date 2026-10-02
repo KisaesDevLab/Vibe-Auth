@@ -172,6 +172,8 @@ export async function bootstrapAuthentik(cfg: BrokerConfig, ak: Authentik, db: D
   const brand = await ak.defaultBrand();
   if (brand) {
     const patch: Record<string, unknown> = {};
+    // No brand flagged default (blueprint ordering race) means every host falls back to an empty brand.
+    if (brand.default !== true) patch.default = true;
     if (brand.branding_title !== cfg.VIBE_AUTH_BRAND_NAME) patch.branding_title = cfg.VIBE_AUTH_BRAND_NAME;
     if (authn && brand.flow_authentication !== authn.pk) patch.flow_authentication = authn.pk;
     const rec = await ak.flowBySlug(RECOVERY_FLOW_SLUG);
