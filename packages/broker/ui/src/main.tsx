@@ -150,9 +150,10 @@ function UsersPage() {
     reloadUsers();
     reloadAccess();
   };
-  // Only restricted products need ticking; open ones admit every firm user.
-  const restrictedApps = (access?.apps ?? []).filter((a) => a.restricted && a.registered);
-  const openApps = (access?.apps ?? []).filter((a) => !a.restricted && a.registered);
+  // Every registered product gets a box per user. An open product admits every firm user, so its box
+  // shows ticked; unticking someone restricts the product (seeded with everyone) and then drops them.
+  const apps = (access?.apps ?? []).filter((a) => a.registered).sort((a, b) => a.displayName.localeCompare(b.displayName));
+  const restrictedApps = apps.filter((a) => a.restricted);
   const [busy, setBusy] = useState<number | null>(null);
   const [showNew, setShowNew] = useState(false);
   const act = async (pk: number, fn: () => Promise<unknown>) => {
@@ -194,13 +195,23 @@ function UsersPage() {
           <label>Name<input name="name" required /></label>
           <label>Email<input name="email" type="email" required /></label>
           <div className="row">{GROUPS.map((g) => (<label key={g} className="row" style={{ gap: ".3rem" }}><input type="checkbox" name={g} defaultChecked={g === "vibe-staff"} />{g}</label>))}</div>
-          {restrictedApps.length > 0 && <div className="row"><span className="muted">Apps:</span>{restrictedApps.map((a) => (<label key={a.slug} className="row" style={{ gap: ".3rem" }}><input type="checkbox" name={`app:${a.slug}`} />{a.displayName}</label>))}</div>}
+          {apps.length > 0 && (
+            <div className="row">
+              <span className="muted">Apps:</span>
+              {apps.map((a) => (
+                <label key={a.slug} className="row" style={{ gap: ".3rem" }} title={a.restricted ? undefined : `${a.displayName} is open to every firm user. Untick someone on the list below to restrict it.`}>
+                  <input type="checkbox" name={`app:${a.slug}`} defaultChecked={!a.restricted} disabled={!a.restricted} />
+                  {a.displayName}
+                </label>
+              ))}
+            </div>
+          )}
           <div><button className="primary" type="submit">Create</button></div>
         </form>
       )}
       {!users ? <p>Loading…</p> : (
         <table>
-          <thead><tr><th>User</th><th>Groups</th><th title="Products this person may sign in to. Restrict a product on the Products page to choose who gets in.">Apps</th><th>Status</th><th>Last sign-in</th><th /></tr></thead>
+          <thead><tr><th>User</th><th>Groups</th><th title="Products this person may sign in to. Open products show ticked for everyone; untick someone to restrict that product to the people you choose.">Apps</th><th>Status</th><th>Last sign-in</th><th /></tr></thead>
           <tbody>
             {users.map((u) => (
               <tr key={u.pk}>
@@ -219,29 +230,40 @@ function UsersPage() {
                   {(() => {
                     const mine = access?.users.find((x) => x.pk === u.pk);
                     if (!access) return <span className="muted">…</span>;
-                    if (restrictedApps.length === 0) return <span className="muted">all apps</span>;
+                    if (apps.length === 0) return <span className="muted">no products registered</span>;
                     if (mine?.admin) return <span className="muted" title="vibe-admin members can always sign in to every product">all apps (admin)</span>;
-                    const ticked = (mine?.apps ?? []).filter((x) => restrictedApps.some((a) => a.slug === x));
+                    const who = u.email || u.username;
                     return (
                       <div className="row" style={{ gap: ".25rem" }}>
-                        {restrictedApps.map((a) => (
-                          <label key={a.slug} className="row" style={{ gap: ".2rem", fontSize: ".8rem" }}>
-                            <input
-                              type="checkbox"
-                              checked={ticked.includes(a.slug)}
-                              disabled={busy === u.pk}
-                              onChange={(e) => {
-                                const on = e.target.checked;
-                                if (!on && !window.confirm(`Remove ${a.displayName} from ${u.email || u.username}? They are signed out of every product now and can sign back in to the apps they still have.`)) return;
-                                // Memberships of open or unregistered products stay untouched: send everything they have, plus or minus this one.
-                                const next = on ? [...(mine?.apps ?? []), a.slug] : (mine?.apps ?? []).filter((x) => x !== a.slug);
-                                void act(u.pk, () => api(`/users/${u.pk}/apps`, { method: "PUT", body: JSON.stringify({ apps: next }) }));
-                              }}
-                            />
-                            {a.displayName}
-                          </label>
-                        ))}
-                        {openApps.length > 0 && <span className="muted" style={{ fontSize: ".8rem" }}>+ {openApps.length} open</span>}
+                        {apps.map((a) => {
+                          const has = a.restricted ? (mine?.apps ?? []).includes(a.slug) : true;
+                          return (
+                            <label key={a.slug} className="row" style={{ gap: ".2rem", fontSize: ".8rem" }} title={a.restricted ? `${a.displayName} is restricted to the people ticked here` : `${a.displayName} is open to every firm user. Untick to restrict it and leave ${who} out.`}>
+                              <input
+                                type="checkbox"
+                                checked={has}
+                                disabled={busy === u.pk}
+                                onChange={(e) => {
+                                  const on = e.target.checked;
+                                  // Memberships of other products stay untouched: send everything they have, plus or minus this one.
+                                  const next = on ? [...(mine?.apps ?? []), a.slug] : (mine?.apps ?? []).filter((x) => x !== a.slug);
+                                  const setApps = () => api(`/users/${u.pk}/apps`, { method: "PUT", body: JSON.stringify({ apps: next }) });
+                                  if (on) return void act(u.pk, setApps);
+                                  if (!a.restricted) {
+                                    if (!window.confirm(`${a.displayName} is currently open to everyone.\n\nRestrict it to the people ticked on this page? Everyone with an active account keeps access except ${who}, who is signed out of every product now and can sign back in to the apps they still have. Administrators always keep access.`)) return;
+                                    return void act(u.pk, async () => {
+                                      await api(`/registrations/${a.slug}/access`, { method: "PUT", body: JSON.stringify({ restricted: true, seed: "everyone" }) });
+                                      await setApps();
+                                    });
+                                  }
+                                  if (!window.confirm(`Remove ${a.displayName} from ${who}? They are signed out of every product now and can sign back in to the apps they still have.`)) return;
+                                  void act(u.pk, setApps);
+                                }}
+                              />
+                              {a.displayName}
+                            </label>
+                          );
+                        })}
                       </div>
                     );
                   })()}
@@ -297,7 +319,7 @@ function ProductsPage() {
         <button onClick={() => void runVerify()}>Verify all</button>
       </div>
       <p className="muted">Products are registered by the Appliance console (or `POST /registrations` with the console token). Each product decides its own sign-in mode (local / both / oidc_only) in its Settings → Authentication page.</p>
-      <p className="muted">Access: a product is open to every firm user until you restrict it; then only the people ticked on the Users page and vibe-admin members can use single sign-on. This does not block a local password in a product that is still in <code>both</code> mode.</p>
+      <p className="muted">Access: a product is open to every firm user until you restrict it (here, or by unticking someone on the Users page); then only the people ticked on the Users page and vibe-admin members can use single sign-on. This does not block a local password in a product that is still in <code>both</code> mode.</p>
       {!regs ? <p>Loading…</p> : (
         <table>
           <thead><tr><th>Product</th><th>Base URL</th><th>Client ID</th><th>Access</th><th>Updated</th><th>Check</th><th /></tr></thead>
