@@ -2,8 +2,10 @@
 # Subpath routing (Q7): http://localhost:8080/auth/ → authentik, /vibe-auth/ → broker, / → ref-app.
 name: vibe-auth-test
 
+x-authentik-image: &authentik-image ghcr.io/goauthentik/server:2026.8.2@sha256:ff8489a5af4f4fe415ffd180a8e3c10b120bc2592d13d79dac050d977f7b9ecd
+
 x-authentik: &authentik
-  image: ghcr.io/goauthentik/server:2026.8.2@sha256:ff8489a5af4f4fe415ffd180a8e3c10b120bc2592d13d79dac050d977f7b9ecd
+  image: *authentik-image
   environment:
     AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
     AUTHENTIK_POSTGRESQL__HOST: postgres
@@ -19,14 +21,36 @@ x-authentik: &authentik
     AUTHENTIK_LOG_LEVEL: info
   volumes:
     - ../deploy/blueprints:/blueprints/vibe:ro
-    - authentik-media:/data
+    # nocopy: Docker would otherwise seed the empty volume with the image's /data/media -> /media
+    # symlink (server and worker racing to create it fails start-up, and when it wins uploads
+    # follow the symlink into the container layer and vanish on recreate).
+    - type: volume
+      source: authentik-media
+      target: /data
+      volume:
+        nocopy: true
     - authentik-templates:/templates
     - ../deploy/templates/vibe:/templates/vibe:ro
   depends_on:
     postgres: { condition: service_healthy }
+    vibe-auth-storage-init: { condition: service_completed_successfully }
   networks: [vibe_net]
 
 services:
+  # Same as deploy/compose.yml: /data/media a real directory owned by authentik (uid 1000).
+  vibe-auth-storage-init:
+    image: *authentik-image
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["sh", "-c", "mkdir -p /data/media && chown 1000:1000 /data /data/media && echo authentik storage ready"]
+    volumes:
+      - type: volume
+        source: authentik-media
+        target: /data
+        volume:
+          nocopy: true
+    network_mode: none
+
   postgres:
     image: postgres:16-alpine
     environment:

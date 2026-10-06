@@ -24,7 +24,7 @@
  *   8. rotate secret, verify, rebase, delete
  * Runs on the host; talks to http://localhost:18080 (Caddy) and to docker compose for restarts.
  */
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -562,7 +562,10 @@ async function main() {
   const inviteText = invite ? mailText(invite.data) : "";
   check("the invitation reads as a welcome, not a password reset", /Set up your Kisaes Test CPA sign-in/.test(invite?.data ?? "") && /Welcome/.test(inviteText) && /Set my password/.test(inviteText) && !/requested to change your password/.test(inviteText), inviteText.replace(/\s+/g, " ").slice(0, 300));
   const token = (s) => /flow_token=([A-Za-z0-9_-]+)/.exec(s ?? "")?.[1];
-  check("the emailed link and the admin's copy are the same one-time token", !!token(invite?.data) && token(mailText(invite?.data ?? "")) === token(created.body.recoveryLink), `${token(mailText(invite?.data ?? ""))} vs ${token(created.body.recoveryLink)}`);
+  // Compare against the raw message with only soft line breaks removed: running the token through
+  // mailText's quoted-printable decoding mangles any token that happens to start with "=XX" hex.
+  const adminToken = token(created.body.recoveryLink);
+  check("the emailed link and the admin's copy are the same one-time token", !!adminToken && (invite?.data ?? "").replace(/=\r?\n/g, "").includes(`flow_token=${adminToken}`), `${adminToken} not found in the invitation`);
   const beforeResend = (await caught("mail")).length;
   const resent = await adminApi(`/users/${created.body.pk}/invite`, "POST");
   check("admin resends the invitation to someone who has not signed in", resent.status === 200 && resent.body.emailed === true && resent.body.to === erinEmail && resent.body.validFor === "3 days", `${resent.status} ${JSON.stringify(resent.body).slice(0, 200)}`);
@@ -583,6 +586,18 @@ async function main() {
   const logoUrl = (await json(`${AK}/api/v3/core/brands/current/`, { headers: { accept: "application/json" } })).body.branding_logo;
   const served = logoUrl ? await fetch(new URL(logoUrl, `${AK}/`).toString()) : null;
   check("the logo is served to browsers through the public /auth/ path", !!served && served.ok && (await served.text()).includes("98AC33"), `${served?.status} ${logoUrl}`);
+  // Served is not stored: when Docker seeds the volume with the image's /data/media -> /media
+  // symlink, uploads land in the container layer and vanish on recreate. Ask the worker, which
+  // shares the volume with the server: the file must be in the volume, under a real directory.
+  let stored = "";
+  try {
+    // execFileSync, not a shell string: the script's quotes must survive on Windows dev hosts too.
+    stored = execFileSync("docker", ["compose", "-f", join(testDir, "compose.yml"), "--env-file", join(testDir, ".env"), "exec", "-T", "vibe-auth-authentik-worker",
+      "sh", "-c", `if [ -L /data/media ]; then echo symlink; elif [ -f /data/media/public/${logoName} ]; then echo stored; else echo missing; fi`], { encoding: "utf8" }).trim();
+  } catch (e) {
+    stored = `exec failed: ${e.message}`;
+  }
+  check("the upload is stored in the volume (not behind a /data/media symlink into the container)", stored === "stored", stored);
   await json(`${AK}/api/v3/core/brands/${brandPk}/`, { method: "PATCH", headers: akHeaders, body: JSON.stringify({ branding_logo: "/static/dist/assets/icons/icon_left_brand.svg" }) });
 
   const notInvitable = await adminApi(`/users/${davePk}/invite`, "POST");

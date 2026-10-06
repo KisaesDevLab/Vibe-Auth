@@ -10,8 +10,10 @@
 # {host}/auth/* → vibe-auth-authentik-server:9000 and {host}/vibe-auth/* → vibe-auth:8080.
 name: vibe
 
+x-authentik-image: &authentik-image ghcr.io/goauthentik/server:2026.8.2@sha256:ff8489a5af4f4fe415ffd180a8e3c10b120bc2592d13d79dac050d977f7b9ecd
+
 x-authentik: &authentik
-  image: ghcr.io/goauthentik/server:2026.8.2@sha256:ff8489a5af4f4fe415ffd180a8e3c10b120bc2592d13d79dac050d977f7b9ecd
+  image: *authentik-image
   restart: unless-stopped
   environment:
     AUTHENTIK_SECRET_KEY: ${VIBE_AUTH_AUTHENTIK_SECRET_KEY:?set VIBE_AUTH_AUTHENTIK_SECRET_KEY}
@@ -44,7 +46,14 @@ x-authentik: &authentik
     # authentik ≥2025.12 offers file uploads (brand logo, favicon, backgrounds) only when /data
     # (or /data/media) is a mount point; /data/media is a symlink to /media inside the image, so a
     # /media mount leaves every upload failing. Files land in media/public/ in this volume.
-    - vibe-auth-media:/data
+    # nocopy: Docker would otherwise seed the empty volume with the image's /data/media -> /media
+    # symlink (server and worker racing to create it fails start-up, and when it wins uploads
+    # follow the symlink into the container layer and vanish on recreate).
+    - type: volume
+      source: vibe-auth-media
+      target: /data
+      volume:
+        nocopy: true
     - vibe-auth-templates:/templates
     # Vibe Auth's own email templates (invitation); the rest of /templates stays the firm's.
     - ./templates/vibe:/templates/vibe:ro
@@ -58,6 +67,7 @@ services:
     command: server
     depends_on:
       vibe-auth-db-init: { condition: service_completed_successfully, required: false }
+      vibe-auth-storage-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
       interval: 30s
@@ -74,13 +84,21 @@ services:
     container_name: vibe-auth-authentik-worker
     command: worker
     volumes:
-      - vibe-auth-media:/data
+      # nocopy: Docker would otherwise seed the empty volume with the image's /data/media -> /media
+      # symlink (server and worker racing to create it fails start-up, and when it wins uploads
+      # follow the symlink into the container layer and vanish on recreate).
+      - type: volume
+        source: vibe-auth-media
+        target: /data
+        volume:
+          nocopy: true
       - vibe-auth-templates:/templates
       - ./templates/vibe:/templates/vibe:ro
       - vibe-auth-certs:/certs
       - ./blueprints:/blueprints/vibe:ro
     depends_on:
       vibe-auth-db-init: { condition: service_completed_successfully, required: false }
+      vibe-auth-storage-init: { condition: service_completed_successfully }
     deploy:
       resources:
         limits: { memory: 768m }
@@ -133,6 +151,23 @@ services:
         reservations: { memory: 128m }
 
   # One-shot: creates database/role in the shared Postgres when VIBE_AUTH_PG_ADMIN_URL is set (D7).
+  # authentik's file storage volume, prepared before authentik starts: /data/media must be a real
+  # directory owned by authentik (uid 1000). The /data mounts use nocopy, so the volume is not
+  # seeded from the image (its /data/media is a symlink to /media) and starts out root-owned.
+  vibe-auth-storage-init:
+    image: *authentik-image
+    container_name: vibe-auth-storage-init
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["sh", "-c", "mkdir -p /data/media && chown 1000:1000 /data /data/media && echo authentik storage ready"]
+    volumes:
+      - type: volume
+        source: vibe-auth-media
+        target: /data
+        volume:
+          nocopy: true
+    network_mode: none
+
   vibe-auth-db-init:
     image: ${VIBE_AUTH_IMAGE:-ghcr.io/kisaesdevlab/vibe-auth:latest}
     container_name: vibe-auth-db-init
