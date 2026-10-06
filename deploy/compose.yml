@@ -41,7 +41,10 @@ x-authentik: &authentik
     AUTHENTIK_EMAIL__USE_TLS: ${VIBE_AUTH_SMTP_TLS:-true}
     AUTHENTIK_EMAIL__FROM: ${VIBE_AUTH_SMTP_FROM:-vibe-auth@localhost}
   volumes:
-    - vibe-auth-media:/media
+    # authentik ≥2025.12 offers file uploads (brand logo, favicon, backgrounds) only when /data
+    # (or /data/media) is a mount point; /data/media is a symlink to /media inside the image, so a
+    # /media mount leaves every upload failing. Files land in media/public/ in this volume.
+    - vibe-auth-media:/data
     - vibe-auth-templates:/templates
     # Vibe Auth's own email templates (invitation); the rest of /templates stays the firm's.
     - ./templates/vibe:/templates/vibe:ro
@@ -71,7 +74,7 @@ services:
     container_name: vibe-auth-authentik-worker
     command: worker
     volumes:
-      - vibe-auth-media:/media
+      - vibe-auth-media:/data
       - vibe-auth-templates:/templates
       - ./templates/vibe:/templates/vibe:ro
       - vibe-auth-certs:/certs

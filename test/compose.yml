@@ -19,7 +19,7 @@ x-authentik: &authentik
     AUTHENTIK_LOG_LEVEL: info
   volumes:
     - ../deploy/blueprints:/blueprints/vibe:ro
-    - authentik-media:/media
+    - authentik-media:/data
     - authentik-templates:/templates
     - ../deploy/templates/vibe:/templates/vibe:ro
   depends_on:

@@ -567,6 +567,24 @@ async function main() {
   const resent = await adminApi(`/users/${created.body.pk}/invite`, "POST");
   check("admin resends the invitation to someone who has not signed in", resent.status === 200 && resent.body.emailed === true && resent.body.to === erinEmail && resent.body.validFor === "3 days", `${resent.status} ${JSON.stringify(resent.body).slice(0, 200)}`);
   check("the resent invitation is delivered", !!(await welcomeMail(beforeResend, "the resent invitation is delivered")));
+  // 7f. brand logo upload (authentik file storage). authentik only offers uploads when /data is a
+  // mount point; with the old /media mount every upload was a 500 ("Response returned an error code").
+  const logoName = `vibe-it-logo-${Date.now()}.svg`;
+  const form = new FormData();
+  form.append("file", new Blob(['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#98AC33"/></svg>'], { type: "image/svg+xml" }), logoName);
+  form.append("usage", "media");
+  const upload = await fetch(`${AK}/api/v3/admin/file/`, { method: "POST", headers: { authorization: akHeaders.authorization }, body: form });
+  check("authentik accepts a brand logo upload (file storage is mounted at /data)", upload.ok, `${upload.status} ${(await upload.text()).slice(0, 200)}`);
+  const brandNow = await json(`${AK}/api/v3/core/brands/?domain=authentik-default`, { headers: akHeaders });
+  const brandPk = brandNow.body.results?.[0]?.brand_uuid;
+  const setLogo = await json(`${AK}/api/v3/core/brands/${brandPk}/`, { method: "PATCH", headers: akHeaders, body: JSON.stringify({ branding_logo: logoName }) });
+  check("the uploaded file can be set as the brand logo", setLogo.status === 200 && setLogo.body.branding_logo === logoName, `${setLogo.status} ${JSON.stringify(setLogo.body).slice(0, 200)}`);
+  // What the sign-in page asks for (anonymous): the brand's logo as a signed /auth/files/... URL.
+  const logoUrl = (await json(`${AK}/api/v3/core/brands/current/`, { headers: { accept: "application/json" } })).body.branding_logo;
+  const served = logoUrl ? await fetch(new URL(logoUrl, `${AK}/`).toString()) : null;
+  check("the logo is served to browsers through the public /auth/ path", !!served && served.ok && (await served.text()).includes("98AC33"), `${served?.status} ${logoUrl}`);
+  await json(`${AK}/api/v3/core/brands/${brandPk}/`, { method: "PATCH", headers: akHeaders, body: JSON.stringify({ branding_logo: "/static/dist/assets/icons/icon_left_brand.svg" }) });
+
   const notInvitable = await adminApi(`/users/${davePk}/invite`, "POST");
   check("resend is refused for someone who has already signed in", notInvitable.status === 409 && /already signed in/.test(String(notInvitable.body.error)), `${notInvitable.status} ${JSON.stringify(notInvitable.body)}`);
 
