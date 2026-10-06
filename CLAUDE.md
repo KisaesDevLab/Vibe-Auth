@@ -35,4 +35,4 @@ Key amendments already made: authentik ≥2025 needs no Redis (no cache service)
 
 - authentik image is pinned by digest in three places (`deploy/compose.yml`, `test/compose.yml`, `Vibe-Appliance/apps/vibe-auth.yml`); change all three together.
 - Never log secrets; the setup token and break-glass passwords are printed once by design.
-- The client package must stay Node 20 / ESM+CJS; products range from Node 20 CJS (Trial Balance) to Node 24 ESM.
+- The client package must stay Node 20 / ESM+CJS (engines `>=20`, `@types/node` 20); products range from Node 20 CJS (Trial Balance) to Node 24 ESM. Everything else — the broker image, the test stack, the ref-app — runs Node 24 (Active LTS). CI tests the workspace on 24 and 20; drop 20 from the matrix when the last product leaves it.

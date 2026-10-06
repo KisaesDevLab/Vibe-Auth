@@ -1,5 +1,5 @@
 # Build context: repository root (workspace package needed).
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 WORKDIR /repo
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json .npmrc ./
@@ -14,7 +14,7 @@ ENV VITE_BASE_PATH=$VITE_BASE_PATH
 RUN pnpm --filter @kisaesdevlab/vibe-auth run build && pnpm --filter vibe-auth-ref-app run build
 RUN pnpm --filter vibe-auth-ref-app --prod deploy /out
 
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 COPY --from=build /out /app
 ENV NODE_ENV=production PORT=3005

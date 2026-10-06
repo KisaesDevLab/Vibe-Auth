@@ -97,7 +97,7 @@ services:
 
   # Sink for the MFA code methods: SMTP on 1025, a stand-in SMS gateway on 8025 (test/catcher/server.mjs).
   catcher:
-    image: node:20-alpine
+    image: node:24-alpine
     command: ["node", "/catcher/server.mjs"]
     ports: ["18025:8025"]
     volumes:
