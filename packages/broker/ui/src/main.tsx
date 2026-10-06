@@ -143,6 +143,18 @@ function OverviewPage() {
   );
 }
 
+type Invite = { emailed: boolean; emailError?: string; link: string | null; validFor: string };
+
+// What the admin sees after an invitation: whether it was emailed, and the same one-time link to
+// pass on by hand (it is the link in the email, so handing it over does not cancel the email).
+function showInvite(to: string, r: Invite, lead: string) {
+  const sent = r.emailed
+    ? `${lead} An invitation to set a password was emailed to ${to}.\nIf it does not arrive, give them this one-time link (valid ${r.validFor}):`
+    : `${lead} No invitation email was sent${r.emailError ? ` (${r.emailError})` : ""}.\nGive ${to} this one-time link to set a password (valid ${r.validFor}):`;
+  if (r.link) window.prompt(sent, r.link);
+  else alert(`${lead} ${r.emailed ? `An invitation was emailed to ${to} (valid ${r.validFor}).` : "No invitation could be sent or created; try Resend invite."}`);
+}
+
 function UsersPage() {
   const { data: users, error, reload: reloadUsers } = useLoad(() => api<User[]>("/users"));
   const { data: access, reload: reloadAccess } = useLoad(() => api<Access>("/access"));
@@ -173,10 +185,8 @@ function UsersPage() {
     const groups = GROUPS.filter((g) => fd.get(g) === "on");
     const apps = restrictedApps.filter((a) => fd.get(`app:${a.slug}`) === "on").map((a) => a.slug);
     try {
-      const r = await api<{ emailed: boolean; recoveryLink: string | null; recoveryUrl: string }>("/users", { method: "POST", body: JSON.stringify({ email: fd.get("email"), name: fd.get("name"), groups, apps }) });
-      const link = r.recoveryLink ?? r.recoveryUrl;
-      if (r.emailed) window.prompt(`User created. A set-password email was sent to ${String(fd.get("email"))}.\nIf it does not arrive, give them this one-time link (valid 30 minutes):`, link);
-      else window.prompt("User created. No reset email was sent (outbound email is not configured or failed).\nGive them this one-time link to set a password (valid 30 minutes):", link);
+      const r = await api<{ emailed: boolean; emailError?: string; recoveryLink: string | null; validFor?: string; recoveryUrl: string }>("/users", { method: "POST", body: JSON.stringify({ email: fd.get("email"), name: fd.get("name"), groups, apps }) });
+      showInvite(String(fd.get("email")), { emailed: r.emailed, emailError: r.emailError, link: r.recoveryLink ?? r.recoveryUrl, validFor: r.validFor ?? "3 days" }, "User created.");
       setShowNew(false);
       reload();
     } catch (err) {
@@ -269,12 +279,19 @@ function UsersPage() {
                   })()}
                 </td>
                 <td><span className={`pill ${u.active ? "ok" : "bad"}`}>{u.active ? "active" : "disabled"}</span></td>
-                <td className="muted">{u.lastLogin ? new Date(u.lastLogin).toLocaleString() : "never"}</td>
+                <td className="muted">{u.lastLogin ? new Date(u.lastLogin).toLocaleString() : u.active ? "never — invitation pending" : "never"}</td>
                 <td>
                   <div className="row">
                     <button disabled={busy === u.pk} onClick={() => window.confirm(`Remove all MFA devices for ${u.email}? They will re-enrol at next sign-in.`) && void act(u.pk, () => api(`/users/${u.pk}/mfa-reset`, { method: "POST" }))}>Reset MFA</button>
-                    <button disabled={busy === u.pk} title="Email a one-time set-password link through the recovery flow" onClick={() => void act(u.pk, async () => { const r = await api<{ to: string }>(`/users/${u.pk}/recovery-email`, { method: "POST" }); alert(`Reset email queued for ${r.to}.`); })}>Send reset email</button>
-                    <button disabled={busy === u.pk} title="Create a one-time set-password link to hand over in person or by chat" onClick={() => void act(u.pk, async () => { const r = await api<{ link: string }>(`/users/${u.pk}/recovery-link`, { method: "POST" }); window.prompt(`One-time password-reset link for ${u.email || u.username} (valid 30 minutes, shown once):`, r.link); })}>Reset link</button>
+                    {!u.lastLogin && u.active ? (
+                      // Never signed in: they are still waiting on their invitation, not resetting a password.
+                      <button disabled={busy === u.pk} title="Email the invitation again (and show its one-time link), valid for another 3 days" onClick={() => window.confirm(`Resend the invitation to ${u.email || u.username}? Their set-password link is renewed for another 3 days; the link in the earlier email keeps working.`) && void act(u.pk, async () => { const r = await api<Invite & { to: string }>(`/users/${u.pk}/invite`, { method: "POST" }); showInvite(r.to, r, "Invitation resent."); })}>Resend invite</button>
+                    ) : (
+                      <>
+                        <button disabled={busy === u.pk} title="Email a one-time set-password link through the recovery flow" onClick={() => void act(u.pk, async () => { const r = await api<{ to: string }>(`/users/${u.pk}/recovery-email`, { method: "POST" }); alert(`Reset email queued for ${r.to}.`); })}>Send reset email</button>
+                        <button disabled={busy === u.pk} title="Create a one-time set-password link to hand over in person or by chat" onClick={() => void act(u.pk, async () => { const r = await api<{ link: string }>(`/users/${u.pk}/recovery-link`, { method: "POST" }); window.prompt(`One-time password-reset link for ${u.email || u.username} (valid 30 minutes, shown once):`, r.link); })}>Reset link</button>
+                      </>
+                    )}
                     <button disabled={busy === u.pk} onClick={() => void act(u.pk, () => api(`/users/${u.pk}/sessions/end`, { method: "POST" }))}>End sessions</button>
                     <button className={u.active ? "danger" : "primary"} disabled={busy === u.pk} onClick={() => void act(u.pk, () => api(`/users/${u.pk}/active`, { method: "POST", body: JSON.stringify({ active: !u.active }) }))}>{u.active ? "Deactivate" : "Activate"}</button>
                   </div>

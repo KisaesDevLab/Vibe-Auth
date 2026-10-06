@@ -43,6 +43,8 @@ x-authentik: &authentik
   volumes:
     - vibe-auth-media:/media
     - vibe-auth-templates:/templates
+    # Vibe Auth's own email templates (invitation); the rest of /templates stays the firm's.
+    - ./templates/vibe:/templates/vibe:ro
     - ./blueprints:/blueprints/vibe:ro
   networks: [vibe_net]
 
@@ -71,6 +73,7 @@ services:
     volumes:
       - vibe-auth-media:/media
       - vibe-auth-templates:/templates
+      - ./templates/vibe:/templates/vibe:ro
       - vibe-auth-certs:/certs
       - ./blueprints:/blueprints/vibe:ro
     depends_on:

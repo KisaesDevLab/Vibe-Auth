@@ -21,6 +21,7 @@ x-authentik: &authentik
     - ../deploy/blueprints:/blueprints/vibe:ro
     - authentik-media:/media
     - authentik-templates:/templates
+    - ../deploy/templates/vibe:/templates/vibe:ro
   depends_on:
     postgres: { condition: service_healthy }
   networks: [vibe_net]

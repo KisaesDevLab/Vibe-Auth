@@ -41,6 +41,8 @@ export interface AkUser {
 }
 export interface AkEmailStage extends AkStage {
   use_global_settings?: boolean;
+  template?: string;
+  subject?: string;
   host?: string;
   port?: number;
   username?: string;
@@ -336,17 +338,33 @@ export class Authentik {
     return this.post<void>(`/core/users/${pk}/set_password/`, { password });
   }
   /** One-time link into the brand's recovery flow (set by bootstrap); the token expires per authentik's default (30 min). */
-  async createRecoveryLink(pk: number): Promise<string> {
-    const r = await this.post<{ link: string }>(`/core/users/${pk}/recovery/`, undefined);
+  /**
+   * One-time set-password link through the brand's recovery flow. authentik keeps ONE such token per
+   * user (identifier "<uid>-password-reset"): every call, and every recovery email, re-uses it and
+   * resets its expiry, to `tokenDuration` (e.g. "days=3") or authentik's default of 30 minutes.
+   */
+  async createRecoveryLink(pk: number, tokenDuration?: string): Promise<string> {
+    const r = await this.post<{ link: string }>(`/core/users/${pk}/recovery/`, tokenDuration ? { token_duration: tokenDuration } : undefined);
     return r.link;
   }
   /**
-   * Ask authentik to email a recovery link through the given email stage. Delivery is asynchronous on authentik's side.
+   * Ask authentik to email a recovery link through the given email stage (its template, subject and
+   * SMTP settings). Delivery is asynchronous on authentik's side. The link's lifetime is
+   * `tokenDuration`, not the stage's token_expiry (authentik ignores that on this path).
    * authentik 2026.x reads email_stage from the JSON body (a query-only call is a 400 "This field is required");
    * older releases read the query string, so both carry it.
    */
-  sendRecoveryEmail(pk: number, emailStagePk: string) {
-    return this.request<void>("POST", `/core/users/${pk}/recovery_email/`, { email_stage: emailStagePk }, { email_stage: emailStagePk });
+  sendRecoveryEmail(pk: number, emailStagePk: string, tokenDuration?: string) {
+    const params = { email_stage: emailStagePk, ...(tokenDuration ? { token_duration: tokenDuration } : {}) };
+    return this.request<void>("POST", `/core/users/${pk}/recovery_email/`, params, params);
+  }
+  /** Email templates authentik can render: built-ins plus files mounted under /templates. */
+  async emailTemplates(): Promise<string[]> {
+    const r = await this.get<Array<{ name: string }>>("/stages/email/templates/");
+    return r.map((t) => t.name);
+  }
+  createEmailStage(body: Record<string, unknown>) {
+    return this.post<AkEmailStage>("/stages/email/", body);
   }
   /** All authenticator devices for a user (admin view). */
   devices(userPk: number) {

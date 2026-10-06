@@ -19,6 +19,8 @@ LABEL org.opencontainers.image.title="Vibe Auth broker" \
 WORKDIR /app
 COPY --from=build /out /app
 COPY deploy/blueprints /app/blueprints
+# Email templates for authentik's /templates/vibe (the Appliance's blueprints one-shot copies them out).
+COPY deploy/templates /app/templates
 COPY deploy/backup.contract.yaml /app/backup.contract.yaml
 COPY packages/broker/hooks /app/hooks
 RUN chmod +x /app/hooks/*.sh && mkdir -p /data && chown node:node /data

@@ -19,6 +19,8 @@
  *   7d. opt-in code methods: an admin signs in to the console, turns on email and SMS codes;
  *       one user enrols and signs in by text message, another by email (codes read from
  *       test/catcher); turning the methods off stops their devices being accepted
+ *   7e. invitations: the welcome stage uses the mounted Vibe template; adding a user emails a
+ *       welcome (not a reset) whose link is the admin's copy; resend works until they sign in
  *   8. rotate secret, verify, rebase, delete
  * Runs on the host; talks to http://localhost:18080 (Caddy) and to docker compose for restarts.
  */
@@ -534,6 +536,39 @@ async function main() {
   check("the emailed reset link points at the public authentik, not the container", !!resetLink && resetLink.startsWith(`${AK}/if/flow/vibe-recovery/`), resetLink);
   const copied = await adminApi(`/users/${davePk}/recovery-link`, "POST");
   check("the copyable recovery link points at the public authentik", copied.status === 200 && String(copied.body.link).startsWith(`${AK}/if/flow/vibe-recovery/`), copied.body.link);
+
+  // 7e. invitations (broker invite.ts): a new person gets a welcome email, not a reset; it can be resent
+  // until they sign in. Same recovery flow underneath, one token shared by the email and the admin's copy.
+  const erinEmail = "erin@kisaes.com";
+  const stale = (await json(`${AK}/api/v3/core/users/?username=${erinEmail}`, { headers: akHeaders })).body.results?.find((u) => u.username === erinEmail);
+  if (stale) await fetch(`${AK}/api/v3/core/users/${stale.pk}/`, { method: "DELETE", headers: akHeaders });
+  const welcomeMail = async (from, label) => {
+    for (let i = 0; i < 30; i++) {
+      const m = (await caught("mail")).slice(from).find((x) => x.to.includes(erinEmail) && /Subject: Set up your /.test(x.data));
+      if (m) return m;
+      await sleep(500);
+    }
+    check(label, false, JSON.stringify((await caught("mail")).slice(from).map((x) => x.to)).slice(0, 200));
+    return null;
+  };
+  const welcomeStage = (await json(`${AK}/api/v3/stages/email/?name=vibe-welcome-email`, { headers: akHeaders })).body.results?.[0];
+  check("the welcome stage exists and uses the mounted Vibe template", welcomeStage?.template === "vibe/welcome.html", JSON.stringify({ template: welcomeStage?.template, subject: welcomeStage?.subject }));
+  const recoveryFlow = (await json(`${AK}/api/v3/flows/instances/vibe-recovery/`, { headers: akHeaders })).body;
+  check("the recovery page is titled for both resets and invitations", recoveryFlow?.title === "Set your password", recoveryFlow?.title);
+  const beforeInvite = (await caught("mail")).length;
+  const created = await adminApi("/users", "POST", { email: erinEmail, name: "Erin Invite", groups: ["vibe-staff"] });
+  check("admin adds a user: invitation emailed, link valid 3 days", created.status === 200 && created.body.emailed === true && created.body.validFor === "3 days" && String(created.body.recoveryLink).startsWith(`${AK}/if/flow/vibe-recovery/`), JSON.stringify(created.body).slice(0, 300));
+  const invite = await welcomeMail(beforeInvite, "the invitation email is delivered");
+  const inviteText = invite ? mailText(invite.data) : "";
+  check("the invitation reads as a welcome, not a password reset", /Set up your Kisaes Test CPA sign-in/.test(invite?.data ?? "") && /Welcome/.test(inviteText) && /Set my password/.test(inviteText) && !/requested to change your password/.test(inviteText), inviteText.replace(/\s+/g, " ").slice(0, 300));
+  const token = (s) => /flow_token=([A-Za-z0-9_-]+)/.exec(s ?? "")?.[1];
+  check("the emailed link and the admin's copy are the same one-time token", !!token(invite?.data) && token(mailText(invite?.data ?? "")) === token(created.body.recoveryLink), `${token(mailText(invite?.data ?? ""))} vs ${token(created.body.recoveryLink)}`);
+  const beforeResend = (await caught("mail")).length;
+  const resent = await adminApi(`/users/${created.body.pk}/invite`, "POST");
+  check("admin resends the invitation to someone who has not signed in", resent.status === 200 && resent.body.emailed === true && resent.body.to === erinEmail && resent.body.validFor === "3 days", `${resent.status} ${JSON.stringify(resent.body).slice(0, 200)}`);
+  check("the resent invitation is delivered", !!(await welcomeMail(beforeResend, "the resent invitation is delivered")));
+  const notInvitable = await adminApi(`/users/${davePk}/invite`, "POST");
+  check("resend is refused for someone who has already signed in", notInvitable.status === 409 && /already signed in/.test(String(notInvitable.body.error)), `${notInvitable.status} ${JSON.stringify(notInvitable.body)}`);
 
   const smsOff = await adminApi("/mfa/methods/sms", "DELETE");
   const emailOff = await adminApi("/mfa/methods/email", "PUT", { enabled: false });

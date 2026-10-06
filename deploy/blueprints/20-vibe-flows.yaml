@@ -14,7 +14,8 @@ entries:
     identifiers: { slug: vibe-recovery }
     attrs:
       name: Vibe password recovery
-      title: Reset your password
+      # Neutral: the same page completes a reset and a new user's invitation.
+      title: Set your password
       designation: recovery
       authentication: require_unauthenticated
       denied_action: message_continue
@@ -40,6 +41,22 @@ entries:
       template: email/password_reset.html
       subject: Reset your password
       token_expiry: minutes=30
+      activate_user_on_success: true
+  # Invitation for a person an administrator added (broker: invite.ts). Not bound to any flow: the
+  # broker names it in authentik's recovery_email call, so the link still enters the recovery flow
+  # but the email says "welcome", not "you requested a password change", and lasts 3 days (the
+  # broker passes that duration). state: created — the broker owns it after creation: SMTP
+  # settings, the brand in the subject, and the template (vibe/welcome.html once /templates/vibe
+  # is mounted; this built-in until then, because a blueprint naming a missing template fails).
+  - model: authentik_stages_email.emailstage
+    id: welcome-email
+    state: created
+    identifiers: { name: vibe-welcome-email }
+    attrs:
+      use_global_settings: true
+      template: email/account_confirmation.html
+      subject: Set up your sign-in
+      token_expiry: days=3
       activate_user_on_success: true
   - model: authentik_stages_prompt.prompt
     id: recovery-prompt-password

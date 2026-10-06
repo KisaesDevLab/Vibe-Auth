@@ -10,7 +10,8 @@ import { ADMIN_APP_SLUG, VIBE_GROUPS } from "./bootstrap.js";
 import type { BrokerConfig } from "./config.js";
 import type { Db, Row } from "./db.js";
 import type { BrokerAudit } from "./audit.js";
-import { emailSettingsInput, RECOVERY_EMAIL_STAGE, type EmailConfig } from "./email.js";
+import { emailSettingsInput, RECOVERY_EMAIL_STAGE, RESET_TOKEN_DURATION, type EmailConfig } from "./email.js";
+import { InviteError, Invites, type InviteResult } from "./invite.js";
 import { SmtpError } from "./smtp.js";
 import { MfaConfigError, smsSettingsInput, type MfaMethods } from "./mfa.js";
 import type { Registrations } from "./registrations.js";
@@ -170,6 +171,13 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
   const actor = (req: Request) => (req as Request & { admin?: VibeUser }).admin?.email ?? "admin";
   const api = express.Router();
   api.use(requireAdmin);
+  const invites = new Invites(d.ak, d.email, d.log);
+  // Audit an invitation without the link itself (a one-time credential, shown to the admin only).
+  const auditInvite = (req: Request, pk: number, r: InviteResult, resend: boolean) => {
+    const at = new Date().toISOString();
+    if (r.emailed) d.audit.emit({ type: "vibe.auth.settings.changed", at, what: resend ? "invite_email_resent" : "invite_email_sent", user_id: pk, actor: actor(req) });
+    if (r.link) d.audit.emit({ type: "vibe.auth.settings.changed", at, what: "invite_link_created", user_id: pk, actor: actor(req) });
+  };
 
   api.get("/overview", async (_req, res) => {
     const c = d.cfg();
@@ -236,13 +244,25 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
       const u = await d.ak.createUser({ username: b.email.toLowerCase(), name: b.name, email: b.email, is_active: true, groups, path: "users" });
       d.audit.emit({ type: "vibe.auth.user.provisioned", at: new Date().toISOString(), user_id: u.pk, issuer: d.cfg().authentikPublicBase, sub: u.uuid, email: b.email, role: b.groups ?? ["vibe-staff"], actor: actor(req) });
       if (b.apps?.length) await d.access.setUserApps(u.pk, b.apps, (await d.regs.list()).map((r) => r.slug)).catch((e: Error) => d.log.warn("could not assign apps to new user", { user: u.pk, error: e.message }));
-      // Hand the admin a way to get the person their first password: email when we can, a link always.
-      const emailed = await sendRecoveryEmail(u.pk).then(() => true).catch((e: Error) => (d.log.warn("recovery email not sent", { user: u.pk, error: e.message }), false));
-      const recoveryLink = await d.ak.createRecoveryLink(u.pk).catch((e: Error) => (d.log.warn("recovery link not created", { user: u.pk, error: e.message }), null));
-      if (emailed) d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "recovery_email_sent", user_id: u.pk, actor: actor(req) });
-      if (recoveryLink) d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "recovery_link_created", user_id: u.pk, actor: actor(req) });
-      res.json({ ok: true, pk: u.pk, emailed, recoveryLink, recoveryUrl: `${d.cfg().authentikPublicBase}/if/flow/vibe-recovery/` });
+      // The invitation: a welcome email when we can, and the same one-time link for the admin always.
+      const inv = await invites.send(u.pk);
+      auditInvite(req, u.pk, inv, false);
+      res.json({ ok: true, pk: u.pk, emailed: inv.emailed, emailError: inv.emailError, recoveryLink: inv.link, validFor: inv.validFor, recoveryUrl: `${d.cfg().authentikPublicBase}/if/flow/vibe-recovery/` });
     } catch (e) {
+      res.status(e instanceof AuthentikError ? e.status : 500).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
+    }
+  });
+  // Resend the invitation to someone who has never signed in. authentik keeps one link per user, so
+  // this renews that same link for the full invitation period (the earlier email's link keeps
+  // working) and emails it again. Refused once they have signed in.
+  api.post("/users/:pk/invite", async (req, res) => {
+    const pk = Number(req.params.pk);
+    try {
+      const inv = await invites.send(pk, { resend: true });
+      auditInvite(req, pk, inv, true);
+      res.json({ ok: true, ...inv });
+    } catch (e) {
+      if (e instanceof InviteError) return res.status(e.status).json({ error: e.message });
       res.status(e instanceof AuthentikError ? e.status : 500).json({ error: e instanceof AuthentikError ? e.body : (e as Error).message });
     }
   });
@@ -253,13 +273,13 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
     if (!status.configured) throw new Error("no outbound email is configured (Admin → Email)");
     const stage = await d.ak.emailStageByName(RECOVERY_EMAIL_STAGE);
     if (!stage) throw new Error(`recovery email stage "${RECOVERY_EMAIL_STAGE}" not found`);
-    await d.ak.sendRecoveryEmail(pk, stage.pk);
+    await d.ak.sendRecoveryEmail(pk, stage.pk, RESET_TOKEN_DURATION);
   }
   // Password reset on behalf of a user. The link is shown to the admin once and never logged.
   api.post("/users/:pk/recovery-link", async (req, res) => {
     const pk = Number(req.params.pk);
     try {
-      const link = await d.ak.createRecoveryLink(pk);
+      const link = await d.ak.createRecoveryLink(pk, RESET_TOKEN_DURATION);
       d.audit.emit({ type: "vibe.auth.settings.changed", at: new Date().toISOString(), what: "recovery_link_created", user_id: pk, actor: actor(req) });
       res.json({ ok: true, link });
     } catch (e) {

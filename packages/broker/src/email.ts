@@ -16,6 +16,28 @@ import { smtpSend, type SmtpSettings } from "./smtp.js";
 
 export const RECOVERY_EMAIL_STAGE = "vibe-recovery-email";
 
+/**
+ * The invitation a new user receives (admin "Add user" / "Resend invite"). Same recovery flow and
+ * one-time link as a reset, but its own subject and wording — a person who never had a password
+ * should not be told "you recently requested to change your password" — and a link that lasts
+ * days, not 30 minutes. authentik takes the link lifetime from the API call (INVITE_TOKEN_DURATION),
+ * not from the stage.
+ */
+export const WELCOME_EMAIL_STAGE = "vibe-welcome-email";
+/** Shipped in deploy/templates; mounted at /templates/vibe in the authentik containers. */
+export const WELCOME_TEMPLATE = "vibe/welcome.html";
+/** authentik built-in, used until the custom template is mounted (an older deployment). */
+export const WELCOME_FALLBACK_TEMPLATE = "email/account_confirmation.html";
+export const INVITE_TOKEN_DURATION = "days=3";
+/**
+ * Admin-sent password resets (Users page "Send reset email" / "Reset link"). Explicit because
+ * authentik ignores the recovery stage's token_expiry on that API path and would otherwise apply
+ * its own default (a day) — the console tells the admin 30 minutes, as the self-service flow does.
+ */
+export const RESET_TOKEN_DURATION = "minutes=30";
+export const INVITE_VALID_FOR = "3 days";
+export const welcomeSubject = (brand: string) => `Set up your ${brand || "Vibe"} sign-in`;
+
 export const emailSettingsInput = z.object({
   host: z.string().trim().min(1, "host required").max(253),
   port: z.coerce.number().int().min(1).max(65535).default(587),
@@ -53,7 +75,7 @@ export interface EmailStatus {
 }
 
 type Store = Pick<Db, "getState" | "setState" | "deleteState" | "wrap" | "unwrap">;
-type Ak = Pick<Authentik, "emailStageByName" | "patchEmailStage">;
+type Ak = Pick<Authentik, "emailStageByName" | "patchEmailStage" | "createEmailStage" | "emailTemplates">;
 
 export class EmailConfig {
   constructor(
@@ -132,20 +154,45 @@ export class EmailConfig {
     return this.apply();
   }
 
-  /** Idempotent: make the recovery email stage match the stored settings (or global settings when none). Called at boot. */
+  /**
+   * Idempotent: make the recovery and welcome email stages match the stored settings (or global
+   * settings when none), and the welcome stage's subject and template match the brand and what is
+   * mounted. Called at boot and on every settings change. Returns false when the recovery stage
+   * is not there yet (settings are still kept); a welcome-stage problem is logged, never fatal.
+   */
   async apply(): Promise<boolean> {
     const stage = await this.ak.emailStageByName(RECOVERY_EMAIL_STAGE);
     if (!stage) {
       this.log.warn("recovery email stage not found; email settings kept for next boot", { stage: RECOVERY_EMAIL_STAGE });
       return false;
     }
-    const s = await this.stored();
-    if (!s) {
-      if (stage.use_global_settings !== true) await this.ak.patchEmailStage(stage.pk, { use_global_settings: true });
-      return true;
+    const smtp = await this.smtpPatch();
+    await this.syncStage(stage, smtp);
+    await this.applyWelcome(smtp).catch((e) => this.log.warn("could not apply the welcome email stage; invitations use it once it is repaired", { stage: WELCOME_EMAIL_STAGE, error: (e as Error).message }));
+    return true;
+  }
+
+  /**
+   * The welcome stage's pk, re-synced first (brand renamed in the wizard, template mounted since
+   * boot, SMTP settings) so an invitation always goes out as configured right now. Null when it
+   * cannot be made usable.
+   */
+  async welcomeStagePk(): Promise<string | null> {
+    try {
+      await this.applyWelcome(await this.smtpPatch());
+      return (await this.ak.emailStageByName(WELCOME_EMAIL_STAGE))?.pk ?? null;
+    } catch (e) {
+      this.log.warn("welcome email stage unavailable", { stage: WELCOME_EMAIL_STAGE, error: (e as Error).message });
+      return null;
     }
+  }
+
+  /** The connection fields every broker-managed email stage carries, or null for authentik's global (env) settings. */
+  private async smtpPatch(): Promise<Record<string, unknown> | null> {
+    const s = await this.stored();
+    if (!s) return null;
     const smtp = this.toSmtp(s);
-    await this.ak.patchEmailStage(stage.pk, {
+    return {
       use_global_settings: false,
       host: smtp.host,
       port: smtp.port,
@@ -155,8 +202,42 @@ export class EmailConfig {
       use_ssl: smtp.useSsl,
       timeout: 15,
       from_address: smtp.from,
-    });
-    return true;
+    };
+  }
+
+  private async syncStage(stage: { pk: string; use_global_settings?: boolean }, smtp: Record<string, unknown> | null, extra: Record<string, unknown> = {}): Promise<void> {
+    if (smtp) return void (await this.ak.patchEmailStage(stage.pk, { ...smtp, ...extra }));
+    const patch: Record<string, unknown> = { ...extra };
+    if (stage.use_global_settings !== true) patch.use_global_settings = true;
+    if (Object.keys(patch).length) await this.ak.patchEmailStage(stage.pk, patch);
+  }
+
+  /**
+   * The welcome stage: created when missing (the blueprint normally does it), subject from the
+   * brand, and the custom template when authentik can see it — else authentik's built-in account
+   * confirmation, so an appliance that has not mounted /templates/vibe yet still sends a welcome
+   * rather than a "you requested a password change" email.
+   */
+  private async applyWelcome(smtp: Record<string, unknown> | null): Promise<void> {
+    const templates = await this.ak.emailTemplates().catch(() => [] as string[]);
+    const template = templates.includes(WELCOME_TEMPLATE) ? WELCOME_TEMPLATE : WELCOME_FALLBACK_TEMPLATE;
+    const subject = welcomeSubject(this.cfg().VIBE_AUTH_BRAND_NAME);
+    let stage = await this.ak.emailStageByName(WELCOME_EMAIL_STAGE);
+    if (!stage) {
+      stage = await this.ak.createEmailStage({
+        name: WELCOME_EMAIL_STAGE,
+        use_global_settings: true,
+        template,
+        subject,
+        token_expiry: INVITE_TOKEN_DURATION,
+        activate_user_on_success: true,
+      });
+      this.log.info("welcome email stage created", { stage: WELCOME_EMAIL_STAGE, template });
+    }
+    const extra: Record<string, unknown> = {};
+    if (stage.template !== template) extra.template = template;
+    if (stage.subject !== subject) extra.subject = subject;
+    await this.syncStage(stage, smtp, extra);
   }
 
   /** Synchronous end-to-end check through the broker's own SMTP client. Throws with a readable reason. */
