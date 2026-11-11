@@ -189,7 +189,7 @@ export function AuthSettingsPage(p: AuthSettingsPageProps) {
             <span style={s.pill}>set by the appliance</span> The appliance sets the sign-in mode. To change it, run <code>sudo vibe identity mode &lt;product&gt; &lt;mode&gt;</code> on the appliance.
           </p>
         )}
-        {!data.guards.canEnableOidcOnly && (
+        {!data.modeManaged && !data.guards.canEnableOidcOnly && (
           <p className={cn("note")} style={st("note", "note")}>
             <strong>oidc_only</strong> requires the break-glass account {data.breakglass.exists ? "(present)" : "(missing — run npx vibe-auth breakglass ensure)"} and a successful connection test in this session
             {data.testLogin.ok ? " (done)" : " (not yet)"}.

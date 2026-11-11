@@ -194,7 +194,10 @@ export class VibeAuth {
     await this.reloadConfig();
     // D35: say so when a value saved on the settings page no longer applies.
     const ignored = ignoredStoredConnection(this.env, await this.settingsStore.get());
-    if (ignored.length) this.log.warn("vibe-auth: the environment sets VIBE_OIDC_CLIENT_ID (and VIBE_AUTH_MODE), so these values saved on the settings page are ignored (the next settings save removes them)", { ignored });
+    if (ignored.length) {
+      const what = ignored.includes("mode") ? "VIBE_OIDC_CLIENT_ID and VIBE_AUTH_MODE" : "VIBE_OIDC_CLIENT_ID";
+      this.log.warn(`vibe-auth: the environment sets ${what}, so these values saved on the settings page are ignored (the next settings save removes them)`, { ignored });
+    }
     if (this.cfg.mode === "oidc_only") {
       const bg = await this.users.findByUsername(this.cfg.breakglassUsername);
       if (!bg || !bg.active) {
