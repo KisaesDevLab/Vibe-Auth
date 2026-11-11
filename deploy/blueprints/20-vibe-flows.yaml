@@ -125,7 +125,10 @@ entries:
       name: Vibe sign-in
       title: Sign in
       designation: authentication
-      authentication: require_unauthenticated
+      # none, not require_unauthenticated: prompt=login (a product's Test connection, step-up
+      # re-authentication with reauth=1) makes authentik run this flow again for someone already
+      # signed in, and a flow that refuses signed-in users answers that with "Not Found".
+      authentication: none
       denied_action: message_continue
       layout: stacked
   - model: authentik_stages_password.passwordstage

@@ -175,7 +175,13 @@ async function runThroughAuthentik(startUrl, jar, who = user) {
       for (let hop = 0; hop < 4; hop++) {
         r = await fetch(url, {
           method: body && hop === 0 ? "POST" : "GET",
-          headers: { cookie: jar.header(), "content-type": "application/json", accept: "application/json" },
+          headers: {
+            cookie: jar.header(),
+            "content-type": "application/json",
+            accept: "application/json",
+            // A browser sends authentik's CSRF token; the executor insists on it once signed in.
+            "x-authentik-csrf": (/(?:^|; )authentik_csrf=([^;]+)/.exec(jar.header()) ?? [])[1] ?? "",
+          },
           body: body && hop === 0 ? JSON.stringify(body) : undefined,
           redirect: "manual",
         });
@@ -392,9 +398,30 @@ async function main() {
   check("second login asks for one code only (no confirmation prompt once a device was validated)", validateSubmits === 1, `codes answered: ${validateSubmits}`);
   const secret = await json(`${APP}/api/secret`, { headers: { cookie: jar2.header() } });
   check("session works after second login", secret.status === 200 && secret.body.secret === "42");
+
   const logout = await fetch(`${APP}/auth/oidc/logout`, { redirect: "manual", headers: { cookie: jar2.header() } });
   const loc = logout.headers.get("location") ?? "";
   check("RP-initiated logout redirects to authentik end-session with id_token_hint", logout.status === 302 && /end-session/.test(loc) && /id_token_hint=/.test(loc), loc.slice(0, 120));
+
+  // 7a. prompt=login while already signed in to authentik: Settings' Test connection (and step-up
+  // with reauth=1) make authentik run the sign-in flow again for a signed-in user. A sign-in flow
+  // set to require_unauthenticated answered that with "Not Found" (found by Vibe Portal).
+  const jarT = new Jar();
+  const tIn = await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jarT);
+  check("admin signs in before Test connection", new URL(tIn.url).pathname === "/ref/api/me", tIn.url);
+  const testStart = await json(`${APP}/auth/settings/test`, { method: "POST", headers: { cookie: jarT.header(), "content-type": "application/json" }, body: "{}" });
+  check("Test connection starts for the signed-in admin", testStart.status === 200 && !!testStart.body.url, JSON.stringify(testStart.body));
+  const testRun = await runThroughAuthentik(new URL(testStart.body.url, BASE).toString(), jarT);
+  check("Test connection re-signs-in through authentik and returns to the product (not authentik's Not Found)", new URL(testRun.url).pathname.endsWith("/auth/oidc/callback") && testRun.res.status === 200 && /Connection test passed/.test(testRun.body ?? ""), `${testRun.res.status} ${testRun.url}`);
+  // authentik replaces its session on the re-sign-in and sends back-channel logout for the old
+  // one, which ends this product session too (recorded here as current behaviour; QUESTIONS).
+  await sleep(3000);
+  const afterTestMe = await json(`${APP}/api/me`, { headers: { cookie: jarT.header() } });
+  console.log(`INFO  product session after Test connection: ${afterTestMe.status} (401 = ended by authentik's back-channel logout)`);
+  const jarT2 = new Jar();
+  await runThroughAuthentik(`${APP}/auth/oidc/start?return_to=/ref/api/me`, jarT2);
+  const afterTest = await json(`${APP}/auth/settings`, { headers: { cookie: jarT2.header() } });
+  check("the passed test is recorded for that admin", afterTest.body.testLogin?.ok === true, JSON.stringify(afterTest.body.testLogin));
 
   // 7b. MFA enforcement OFF (the broker's admin toggle sets not_configured_action=skip on the
   // validation stage): a user with no device signs in without being asked for a code, so the
