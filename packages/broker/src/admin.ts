@@ -16,6 +16,7 @@ import { SmtpError } from "./smtp.js";
 import { MfaConfigError, smsSettingsInput, type MfaMethods } from "./mfa.js";
 import type { Registrations } from "./registrations.js";
 import type { Setup } from "./setup.js";
+import { catchAsync } from "./async-routes.js";
 import type { Logger } from "./log.js";
 
 /**
@@ -156,7 +157,7 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
     logger: d.log,
   });
 
-  const router = express.Router();
+  const router = catchAsync(express.Router());
   router.use(vibeAuthExpress(auth));
   // The client package's login path and authentik's launch URL point under authPath; the console itself is at base.
   if (authPath !== base) router.get([authPath, `${authPath}/`, `${authPath}/admin`], (_req, res) => res.redirect(`${base}/admin`));
@@ -169,7 +170,7 @@ export async function buildAdmin(d: AdminDeps): Promise<{ router: Router; ready:
     next();
   };
   const actor = (req: Request) => (req as Request & { admin?: VibeUser }).admin?.email ?? "admin";
-  const api = express.Router();
+  const api = catchAsync(express.Router());
   api.use(requireAdmin);
   const invites = new Invites(d.ak, d.email, d.log);
   // Audit an invitation without the link itself (a one-time credential, shown to the admin only).

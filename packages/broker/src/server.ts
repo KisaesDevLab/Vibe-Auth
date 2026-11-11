@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { AppAccess } from "./access.js";
+import { catchAsync, jsonErrors } from "./async-routes.js";
 import { buildAdmin } from "./admin.js";
 import { BrokerAudit, startEventForwarder } from "./audit.js";
 import { Authentik } from "./authentik.js";
@@ -21,6 +22,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export async function main(): Promise<void> {
   let cfg: BrokerConfig = loadConfig();
   const log = createLogger(cfg.VIBE_AUTH_LOG_LEVEL);
+  // Last resort: a promise rejected outside any request (authentik down or restarting) is logged,
+  // never fatal. Routes pass theirs to jsonErrors (catchAsync).
+  process.on("unhandledRejection", (reason) => {
+    log.error("unhandled rejection (broker kept running)", { error: reason instanceof Error ? reason.message : String(reason) });
+  });
   const db = new Db(cfg);
   await db.ensureDatabase();
   await db.migrate();
@@ -43,7 +49,7 @@ export async function main(): Promise<void> {
   const access = new AppAccess(ak, db, requireBoot, log);
   const regs = new Registrations(() => cfg, ak, db, requireBoot, access);
 
-  const app = express();
+  const app = catchAsync(express());
   app.set("trust proxy", true);
   app.disable("x-powered-by");
   const base = cfg.VIBE_AUTH_BASE_PATH;
@@ -72,7 +78,7 @@ export async function main(): Promise<void> {
     if (!boot) return res.status(503).json({ error: "authentik_not_ready", bootError });
     next();
   };
-  const consoleApi = express.Router();
+  const consoleApi = catchAsync(express.Router());
   consoleApi.use(express.json());
   // Only the registration/rebase/setup-token surface is console-token protected; the
   // setup wizard, health, version and admin console share the same base path.
@@ -181,6 +187,8 @@ export async function main(): Promise<void> {
     app.get(`${base}/admin`, (_req, res) => res.type("html").send("<h1>Vibe Auth</h1><p>Admin UI not built.</p>"));
   }
   app.get([base, `${base}/`], (_req, res) => res.redirect(`${base}/admin`));
+  // Any error a route did not answer itself (authentik unreachable → 503), never a crash.
+  app.use(jsonErrors(log));
 
   const server = app.listen(cfg.VIBE_AUTH_PORT, () => log.info("broker listening", { port: cfg.VIBE_AUTH_PORT, base, publicBase: cfg.authentikPublicBase, routing: cfg.VIBE_AUTH_ROUTING }));
 
