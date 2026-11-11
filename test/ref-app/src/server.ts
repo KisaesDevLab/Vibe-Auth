@@ -30,8 +30,8 @@ async function main() {
     loginPath: "/login",
     breakglassLoginPath: "/login/local",
     trustProxy: true,
-    // Test stack: a short step-up window so the integration can check a second step-up after it.
-    ...(process.env.REF_REAUTH_MAX_AGE ? { reauthMaxAgeSeconds: Number(process.env.REF_REAUTH_MAX_AGE) } : {}),
+    // Test stack: a 10 s step-up re-ask window instead of 90, so the integration need not wait.
+    ...(process.env.REF_REAUTH_PROMPT_MAX_AGE ? { reauthPromptMaxAgeSeconds: Number(process.env.REF_REAUTH_PROMPT_MAX_AGE) } : {}),
   });
 
   const app = express();

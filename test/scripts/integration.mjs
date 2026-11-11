@@ -422,35 +422,33 @@ async function main() {
   const afterTest = await json(`${APP}/auth/settings`, { headers: { cookie: jarT2.header() } });
   check("the passed test is recorded for that admin", afterTest.body.testLogin?.ok === true, JSON.stringify(afterTest.body.testLogin));
 
-  // 7a2. Step-up (reauth=1): the product session must survive authentik's re-sign-in and carry a
-  // fresh step-up marker. authentik replaces its session on that sign-in and sends back-channel
-  // logout for the old one; the engine holds it while the re-sign-in is under way.
-  const suBefore = await json(`${APP}/api/step-up`, { headers: { cookie: jarT2.header() } });
-  check("step-up: a signed-in SSO session to start from", suBefore.status === 200 && !!suBefore.body.oidcSid, JSON.stringify(suBefore.body));
-  const stepStartedAt = new Date().toISOString();
-  const step = await runThroughAuthentik(`${APP}/auth/oidc/start?reauth=1&return_to=/ref/api/step-up`, jarT2);
-  console.log(`INFO  step-up ended at ${step.res.status} ${step.url} :: ${String(step.body).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 300)}`);
-  await sleep(3000);
-  const suAfter = await json(`${APP}/api/step-up`, { headers: { cookie: jarT2.header() } });
-  const events = (await json(`${APP}/api/audit-tail?since=${encodeURIComponent(stepStartedAt)}`, { headers: { cookie: jarT2.header() } })).body;
-  console.log(`INFO  step-up events: ${JSON.stringify(events)}`);
-  check("step-up: the product session survives the re-sign-in", suAfter.status === 200, `${suAfter.status} ${JSON.stringify(suAfter.body)}`);
-  check("step-up: the session carries a fresh step-up marker", !!suAfter.body.lastStepUpAt && new Date(suAfter.body.lastStepUpAt) >= new Date(stepStartedAt), JSON.stringify(suAfter.body));
-  console.log(`INFO  first step-up re-signed-in at authentik: ${suAfter.body.oidcSid !== suBefore.body.oidcSid} (not if Test connection signed in moments ago: inside the 20 s window)`);
-  // A second step-up once the window (REF_REAUTH_MAX_AGE=20 on the test stack) has passed: authentik
-  // honours prompt=login only once per session, so only max_age makes it ask again (1.0.21).
-  await sleep(23_000);
-  const su2Before = await json(`${APP}/api/step-up`, { headers: { cookie: jarT2.header() } });
-  const su2At = new Date().toISOString();
-  const step2 = await runThroughAuthentik(`${APP}/auth/oidc/start?reauth=1&return_to=/ref/api/step-up`, jarT2);
-  const askedAgain = validateSubmits;
-  await sleep(3000);
-  const su2After = await json(`${APP}/api/step-up`, { headers: { cookie: jarT2.header() } });
-  const events2 = (await json(`${APP}/api/audit-tail?since=${encodeURIComponent(su2At)}`, { headers: { cookie: jarT2.header() } })).body;
-  check("second step-up after the window: authentik asks for the code again", askedAgain >= 1, `codes answered: ${askedAgain}; ${step2.res.status} ${step2.url}`);
-  check("second step-up: the session survives with a new marker", su2After.status === 200 && new Date(su2After.body.lastStepUpAt) >= new Date(su2At), JSON.stringify(su2After.body));
-  check("second step-up: the session follows authentik's new session", !!su2After.body.oidcSid && su2After.body.oidcSid !== su2Before.body.oidcSid, `${su2Before.body.oidcSid} -> ${su2After.body.oidcSid}`);
-  check("second step-up: authentik's logout of the old session was held, then dropped", Array.isArray(events2) && events2.some((e) => e.type === "vibe.auth.logout.held") && events2.some((e) => e.type === "vibe.auth.session.rebound"), JSON.stringify(events2));
+  // 7a2. Step-up (reauth=1) asks for a new sign-in unless the last one is inside the re-ask window
+  // (90 s; REF_REAUTH_PROMPT_MAX_AGE=10 on this stack), and the product session survives it:
+  // authentik replaces its session on that sign-in and sends back-channel logout for the old one;
+  // the engine holds it and moves the session (1.0.21, D34). Two past the window: authentik honours
+  // prompt=login only once per session, so the second relies on max_age.
+  await sleep(12_000); // past the window since Test connection's sign-in
+  for (const round of [1, 2]) {
+    const before = await json(`${APP}/api/step-up`, { headers: { cookie: jarT2.header() } });
+    check(`step-up ${round}: a signed-in SSO session to start from`, before.status === 200 && !!before.body.oidcSid, JSON.stringify(before.body));
+    const at = new Date().toISOString();
+    const step = await runThroughAuthentik(`${APP}/auth/oidc/start?reauth=1&return_to=/ref/api/step-up`, jarT2);
+    const asked = validateSubmits;
+    await sleep(3000);
+    const after = await json(`${APP}/api/step-up`, { headers: { cookie: jarT2.header() } });
+    const evs = (await json(`${APP}/api/audit-tail?since=${encodeURIComponent(at)}`, { headers: { cookie: jarT2.header() } })).body;
+    check(`step-up ${round}: authentik asks for the code again`, asked >= 1, `codes answered: ${asked}; ${step.res.status} ${step.url}`);
+    check(`step-up ${round}: the product session survives with a fresh marker`, after.status === 200 && new Date(after.body.lastStepUpAt) >= new Date(at), `${after.status} ${JSON.stringify(after.body)}`);
+    check(`step-up ${round}: the session follows authentik's new session`, !!after.body.oidcSid && after.body.oidcSid !== before.body.oidcSid, `${before.body.oidcSid} -> ${after.body.oidcSid}`);
+    check(`step-up ${round}: authentik's logout of the old session was held, then dropped`, Array.isArray(evs) && evs.some((e) => e.type === "vibe.auth.logout.held") && evs.some((e) => e.type === "vibe.auth.session.rebound"), JSON.stringify(evs));
+    if (round === 1) await sleep(12_000); // past the window again
+  }
+  // Inside the window: no new code asked, and the step-up still counts.
+  const inAt = new Date().toISOString();
+  await runThroughAuthentik(`${APP}/auth/oidc/start?reauth=1&return_to=/ref/api/step-up`, jarT2);
+  const inAsked = validateSubmits;
+  const inAfter = await json(`${APP}/api/step-up`, { headers: { cookie: jarT2.header() } });
+  check("step-up inside the window: no new code asked, the step-up still counts", inAsked === 0 && inAfter.status === 200 && new Date(inAfter.body.lastStepUpAt) >= new Date(inAt), `codes answered: ${inAsked}; ${JSON.stringify(inAfter.body)}`);
   // Ending the NEW authentik session still ends the product session (nothing stays held).
   const aliceSessions = await json(`${AK}/api/v3/core/authenticated_sessions/?user__username=alice`, { headers: akHeaders });
   for (const x of aliceSessions.body.results ?? []) await fetch(`${AK}/api/v3/core/authenticated_sessions/${x.uuid}/`, { method: "DELETE", headers: akHeaders });

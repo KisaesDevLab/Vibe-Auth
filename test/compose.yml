@@ -111,7 +111,7 @@ services:
       DATABASE_URL: postgresql://ref:ref@postgres:5432/ref
       ENCRYPTION_KEY: ref-test-key
       SESSION_SECURE: "false"
-      REF_REAUTH_MAX_AGE: "20"
+      REF_REAUTH_PROMPT_MAX_AGE: "10"
       # VIBE_OIDC_* / VIBE_AUTH_MODE are injected by the integration script via ref-app.env
     env_file:
       - path: ./ref-app.env

@@ -78,7 +78,20 @@ export interface VibeAuthOptions {
    * held (1.0.21; default: the pending-login lifetime, 5 minutes). Tests shorten it.
    */
   reauthHoldMs?: number;
+  /**
+   * Step-up (`reauth=1`) asks for a new sign-in unless the last one was within this many seconds
+   * (1.0.21; default 90, minimum 1). Sent to the IdP as `max_age`; the callback refuses a sign-in
+   * older than the step-up's start by more than this.
+   */
+  reauthPromptMaxAgeSeconds?: number;
 }
+
+/**
+ * Step-up asks for a new sign-in unless the last one was within this many seconds (owner
+ * 2026-11-10: 90): sent as `max_age` with `reauth=1`, and the most a sign-in may predate the
+ * step-up's start and still count. Never 0 (authentik reads max_age=0 as unset). 1.0.21.
+ */
+export const REAUTH_PROMPT_MAX_AGE_SECONDS = 90;
 
 /** A back-channel logout held while the browser that holds `sid` re-signs-in (1.0.21). */
 interface ReauthHold {
@@ -477,13 +490,12 @@ export class VibeAuth {
     url.searchParams.set("code_challenge_method", "S256");
     if (test) url.searchParams.set("prompt", "login");
     if (reauth) {
-      // Force a fresh authentication. max_age is the window the callback accepts (not 0): authentik
-      // 2026.8 treats max_age=0 as unset, and honours prompt=login only once per authentik
-      // session (it never clears its "already re-signed-in" marker), so a second step-up would
-      // get no new sign-in. A positive max_age re-prompts whenever the last sign-in is older than
-      // the window; a sign-in inside the window is fresh enough by the same rule (1.0.21).
+      // Ask for a new sign-in. prompt=login alone is not enough on authentik 2026.8: it honours it
+      // only once per authentik session (its "already re-signed-in" marker is never cleared) and
+      // reads max_age=0 as unset. max_age makes it ask whenever the last sign-in is older than the
+      // product's window; the callback then refuses anything older (1.0.21).
       url.searchParams.set("prompt", "login");
-      url.searchParams.set("max_age", String(Math.max(1, Math.floor(this.opts.reauthMaxAgeSeconds ?? 120))));
+      url.searchParams.set("max_age", String(this.reauthPromptMaxAge()));
     }
     return redirect(url.toString());
   }
@@ -675,6 +687,11 @@ export class VibeAuth {
     if (authTime === undefined || nowSec - authTime > maxAge + (this.cfg.oidc?.clockTolerance ?? 60)) {
       return fail("reauth_stale", "The identity provider did not perform a fresh sign-in. Please try again.", { sub: claims.sub, auth_time: authTime });
     }
+    // A sign-in older than the window the IdP was given (max_age) before this step-up does not
+    // count (1.0.21); 2 s for clocks: the IdP and the product share the appliance.
+    if (authTime < Math.floor(pending.createdAt / 1000) - this.reauthPromptMaxAge() - 2) {
+      return fail("reauth_stale", "The identity provider did not ask you to sign in again. Please try again.", { sub: claims.sub, auth_time: authTime });
+    }
     // The session's user must still be the one who started the re-auth, and the IdP subject
     // must be that user's linked identity. A different account at the IdP does not count.
     const currentUserId = await this.session.currentUserId(req.raw.req as never);
@@ -811,6 +828,10 @@ export class VibeAuth {
   }
 
   // ---------------------------------------------------------------- held logout during re-sign-in (1.0.21)
+
+  private reauthPromptMaxAge(): number {
+    return Math.max(1, Math.floor(this.opts.reauthPromptMaxAgeSeconds ?? REAUTH_PROMPT_MAX_AGE_SECONDS));
+  }
 
   private holdMs(): number {
     return this.opts.reauthHoldMs ?? PENDING_TTL_MS;

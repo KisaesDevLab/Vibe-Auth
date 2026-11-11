@@ -300,7 +300,7 @@ describe("step-up re-authentication (1.0.8)", () => {
     expect(r.location).toBe("/adjustments/9");
     const authz = idp.authorizeRequests.at(-1)!;
     expect(authz.get("prompt")).toBe("login");
-    expect(authz.get("max_age")).toBe("120"); // the window the callback accepts (authentik ignores 0)
+    expect(authz.get("max_age")).toBe("90"); // the re-ask window (authentik reads 0 as unset)
     expect(h.sessions.stepUps.has(s.sid)).toBe(true);
     // Still exactly one session, no new cookie, no second login event.
     expect(h.sessions.store.size).toBe(1);
@@ -319,6 +319,16 @@ describe("step-up re-authentication (1.0.8)", () => {
     expect(h.events.find((e) => e.type === "vibe.auth.login.failure")?.reason).toBe("reauth_stale");
     expect(h.sessions.stepUps.size).toBe(0);
     expect(h.sessions.store.size).toBe(1);
+  });
+
+  it("rejects a sign-in older than the 90 s re-ask window, even inside reauthMaxAgeSeconds", async () => {
+    const s = await signedIn();
+    idp.ignorePromptLogin = true;
+    idp.sessionAuthTime = Math.floor(Date.now() / 1000) - 100; // within 120 (+60), but past 90
+    const r = await loginViaBrowser(h.base, "/auth/oidc/start?reauth=1", [...s.cookies]);
+    expect(r.status).toBe(401);
+    expect(h.events.find((e) => e.type === "vibe.auth.login.failure")?.reason).toBe("reauth_stale");
+    expect(h.sessions.stepUps.size).toBe(0);
   });
 
   it("rejects a re-auth as a different IdP account", async () => {

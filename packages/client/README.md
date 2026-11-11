@@ -27,9 +27,10 @@ Tables: run `sql/auth_identities.sql` in your migrations (or `import { authIdent
 
 Step-up re-authentication (1.0.8): products with a "fresh factor required" gate (large adjustments, payouts) send an SSO
 user to `GET /auth/oidc/start?reauth=1&return_to=<path>` instead of a local TOTP prompt. The engine asks the IdP for a
-fresh sign-in (`prompt=login`, plus `max_age` = `reauthMaxAgeSeconds`, default 120; since 1.0.21, because authentik
-ignores `max_age=0` and honours `prompt=login` only once per session), checks that the ID token's `auth_time` is within
-that window and that its subject is the identity linked to the CURRENT session's user, then calls the optional
+fresh sign-in (`prompt=login` and, since 1.0.21, `max_age` = `reauthPromptMaxAgeSeconds`, default 90: authentik reads
+`max_age=0` as unset and honours `prompt=login` only once per session), so the person is asked again unless they signed
+in within those 90 s; the callback refuses an `auth_time` older than that before the step-up, or past
+`reauthMaxAgeSeconds` (default 120), and that its subject is the identity linked to the CURRENT session's user, then calls the optional
 `SessionAdapter.markStepUp(req, res, user, identity)` — refresh your session's step-up timestamp there — and audits
 `vibe.auth.stepup.success`. No session is created on this path; mismatches are `vibe.auth.login.failure` with
 `reason: reauth_stale | reauth_subject_mismatch | reauth_session_changed`. React: `authClient().reauthPath(returnTo)`.
