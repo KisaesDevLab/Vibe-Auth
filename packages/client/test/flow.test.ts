@@ -300,7 +300,7 @@ describe("step-up re-authentication (1.0.8)", () => {
     expect(r.location).toBe("/adjustments/9");
     const authz = idp.authorizeRequests.at(-1)!;
     expect(authz.get("prompt")).toBe("login");
-    expect(authz.get("max_age")).toBe("0");
+    expect(authz.get("max_age")).toBe("120"); // the window the callback accepts (authentik ignores 0)
     expect(h.sessions.stepUps.has(s.sid)).toBe(true);
     // Still exactly one session, no new cookie, no second login event.
     expect(h.sessions.store.size).toBe(1);
@@ -344,5 +344,109 @@ describe("step-up re-authentication (1.0.8)", () => {
     const s = await signedIn();
     const r = await fetch(h.base + "/auth/oidc/start?reauth=1", { redirect: "manual", headers: { cookie: s.cookies.join("; ") } });
     expect(r.status).toBe(409);
+  });
+});
+
+describe("re-sign-in keeps the session when the OP replaces its own (1.0.21)", () => {
+  async function bootReplacing(mode: "before-callback" | "after-callback", extra: Record<string, unknown> = {}) {
+    idp = await new FakeIdp({ clientId: "ref-client", clientSecret: "s3cret", user: { ...baseUser } }).start();
+    h = await startHarness({ VIBE_AUTH_MODE: "both", VIBE_OIDC_ISSUER: idp.issuer, VIBE_OIDC_CLIENT_ID: "ref-client", VIBE_OIDC_CLIENT_SECRET: "s3cret" }, extra);
+    idp.backchannelUri = h.base + "/auth/oidc/backchannel";
+    idp.replaceSessionOnPromptLogin = mode;
+  }
+  async function signedIn() {
+    const r = await loginViaBrowser(h.base, "/auth/oidc/start?return_to=/dash");
+    const sid = r.cookies.find((c) => c.startsWith("sid="))!.slice(4);
+    return { cookies: r.cookies, sid };
+  }
+  const settle = async () => {
+    await Promise.all(idp.sentLogouts);
+    await new Promise((r) => setTimeout(r, 50));
+  };
+
+  for (const mode of ["before-callback", "after-callback"] as const) {
+    it(`step-up: the session survives the OP's logout of its old session (${mode})`, async () => {
+      await bootReplacing(mode);
+      const s = await signedIn();
+      const oldSid = h.sessions.store.get(s.sid)!.identity.sid;
+      const r = await loginViaBrowser(h.base, "/auth/oidc/start?reauth=1&return_to=/adjustments/9", [...s.cookies]);
+      await settle();
+      expect(r.location).toBe("/adjustments/9");
+      expect(h.sessions.store.has(s.sid)).toBe(true);
+      expect(h.sessions.stepUps.has(s.sid)).toBe(true);
+      // The session now follows the OP's new session ...
+      const moved = h.sessions.store.get(s.sid)!.identity.sid;
+      expect(moved).toBe(idp.currentSid);
+      expect(moved).not.toBe(oldSid);
+      expect(h.events.map((e) => e.type)).toContain("vibe.auth.session.rebound");
+      // ... so a later sign-out of THAT session still ends it.
+      expect(await idp.sendBackchannelLogout(moved!)).toBe(200);
+      expect(h.sessions.store.has(s.sid)).toBe(false);
+    });
+  }
+
+  it("Test connection keeps the admin's own SSO session", async () => {
+    await bootReplacing("before-callback");
+    const s = await signedIn();
+    const start = (await (await fetch(h.base + "/auth/settings/test", { method: "POST", headers: { cookie: s.cookies.join("; "), "content-type": "application/json" }, body: "{}" })).json()) as { url: string };
+    const r = await loginViaBrowser(h.base, start.url, [...s.cookies]);
+    await settle();
+    expect(r.status).toBe(200);
+    expect(h.sessions.store.has(s.sid)).toBe(true);
+    expect(h.sessions.store.get(s.sid)!.identity.sid).toBe(idp.currentSid);
+  });
+
+  it("a sign-out of another OP session is never held", async () => {
+    await bootReplacing("before-callback");
+    const s = await signedIn();
+    // The re-sign-in starts (hold placed) but the browser is still at the OP.
+    const started = await fetch(h.base + "/auth/oidc/start?reauth=1", { redirect: "manual", headers: { cookie: s.cookies.join("; ") } });
+    expect(started.status).toBe(302);
+    expect(await idp.sendBackchannelLogout("sid-other-device")).toBe(200);
+    // Ended at once (this harness ends a user's sessions by subject too).
+    expect(h.sessions.store.has(s.sid)).toBe(false);
+    expect(h.events.map((e) => e.type)).not.toContain("vibe.auth.logout.held");
+  });
+
+  it("a re-sign-in abandoned after the OP's logout ends the session when the hold expires", async () => {
+    await bootReplacing("before-callback", { reauthHoldMs: 200 });
+    const s = await signedIn();
+    const oldSid = h.sessions.store.get(s.sid)!.identity.sid!;
+    await fetch(h.base + "/auth/oidc/start?reauth=1", { redirect: "manual", headers: { cookie: s.cookies.join("; ") } });
+    const loggedOutAt = Date.now();
+    expect(await idp.sendBackchannelLogout(oldSid)).toBe(200);
+    expect(h.sessions.store.has(s.sid)).toBe(true); // held
+    expect(h.events.map((e) => e.type)).toContain("vibe.auth.logout.held");
+    await new Promise((r) => setTimeout(r, 1400));
+    expect(h.sessions.store.has(s.sid)).toBe(false);
+    const ended = h.events.find((e) => e.type === "vibe.auth.logout" && (e as { how?: string }).how === "held_expired");
+    expect(ended).toBeTruthy();
+    // JWT products: revoked as of the OP's logout, not of the expiry.
+    expect(await h.revocations.isRevoked({ sid: oldSid }, loggedOutAt - 100)).toBe(true);
+    expect(await h.revocations.isRevoked({ sid: oldSid }, loggedOutAt + 400)).toBe(false);
+  });
+
+  it("a re-sign-in as another account carries out the held logout", async () => {
+    await bootReplacing("before-callback");
+    const s = await signedIn();
+    idp.user = { ...idp.user, sub: "u-200", email: "someone@else.example" };
+    const r = await loginViaBrowser(h.base, "/auth/oidc/start?reauth=1", [...s.cookies]);
+    await settle();
+    expect(r.status).toBe(401);
+    expect(h.sessions.store.has(s.sid)).toBe(false);
+    expect(h.sessions.stepUps.size).toBe(0);
+  });
+
+  it("without rebindIdentity nothing is held (the step-up fails as before)", async () => {
+    const { MemorySessions } = await import("./harness.js");
+    const sessions = new MemorySessions();
+    (sessions as { rebindIdentity?: unknown }).rebindIdentity = undefined;
+    await bootReplacing("before-callback", { session: sessions });
+    const s = await signedIn();
+    const r = await loginViaBrowser(h.base, "/auth/oidc/start?reauth=1", [...s.cookies]);
+    await settle();
+    expect(r.status).toBe(401);
+    expect(h.events.find((e) => e.type === "vibe.auth.login.failure")?.reason).toBe("reauth_session_changed");
+    expect(h.events.map((e) => e.type)).not.toContain("vibe.auth.logout.held");
   });
 });

@@ -27,11 +27,20 @@ Tables: run `sql/auth_identities.sql` in your migrations (or `import { authIdent
 
 Step-up re-authentication (1.0.8): products with a "fresh factor required" gate (large adjustments, payouts) send an SSO
 user to `GET /auth/oidc/start?reauth=1&return_to=<path>` instead of a local TOTP prompt. The engine asks the IdP for a
-fresh sign-in (`prompt=login`, `max_age=0`), checks that the ID token's `auth_time` is recent (`reauthMaxAgeSeconds`,
-default 120) and that its subject is the identity linked to the CURRENT session's user, then calls the optional
+fresh sign-in (`prompt=login`, plus `max_age` = `reauthMaxAgeSeconds`, default 120; since 1.0.21, because authentik
+ignores `max_age=0` and honours `prompt=login` only once per session), checks that the ID token's `auth_time` is within
+that window and that its subject is the identity linked to the CURRENT session's user, then calls the optional
 `SessionAdapter.markStepUp(req, res, user, identity)` — refresh your session's step-up timestamp there — and audits
 `vibe.auth.stepup.success`. No session is created on this path; mismatches are `vibe.auth.login.failure` with
 `reason: reauth_stale | reauth_subject_mismatch | reauth_session_changed`. React: `authClient().reauthPath(returnTo)`.
+
+Keeping the session through the re-sign-in (1.0.21, D34): authentik answers `prompt=login` by replacing its own session
+and sending back-channel logout for the old `sid`, which ends the product session before the callback arrives
+(`reauth_session_changed`). Implement the optional `SessionAdapter.rebindIdentity(req, res, identity)` (store the new
+`identity.sid` and `identity.idToken` on the current session): the engine then holds the logout for exactly that `sid`
+while the re-sign-in is pending and moves the session afterwards (audited `vibe.auth.logout.held`,
+`vibe.auth.session.rebound`). It also keeps an SSO-signed-in admin signed in after Settings' **Test connection**.
+Without it, step-up fails on authentik.
 
 React: `import { LoginPanel, AuthSettingsPage } from "@kisaesdevlab/vibe-auth/react"`.
 CLI: `npx vibe-auth breakglass ensure|rotate|status` (needs `"vibeAuth": { "adapter": "./dist/vibe-auth-adapter.js" }` in package.json).

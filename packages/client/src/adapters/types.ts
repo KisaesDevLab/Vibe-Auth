@@ -118,6 +118,19 @@ export interface SessionAdapter<Req = Raw, Res = Raw> {
    * so SSO users re-prove themselves at the IdP instead of enrolling a local factor.
    */
   markStepUp?(req: Req, res: Res, user: VibeUser, identity: SessionIdentity): Promise<void>;
+  /**
+   * Keep the CURRENT product session across an IdP re-sign-in (1.0.21): store the new identity
+   * (its `sid` and ID token) on the session the browser already holds. Called after a step-up
+   * (`reauth=1`) or Settings' Test connection completes as the same IdP account.
+   *
+   * Why: an OP that honours `prompt=login` by signing the user in again (authentik) replaces its
+   * own session and sends back-channel logout for the old `sid`, which would end the product
+   * session mid-step-up. When this method exists, the engine holds a back-channel logout for
+   * exactly the old `sid` while the re-sign-in is under way (at most the pending-login lifetime),
+   * then moves the session here; a failed, abandoned or different-account re-sign-in carries the
+   * held logout out. Without it, nothing is held (the session ends as before).
+   */
+  rebindIdentity?(req: Req, res: Res, identity: SessionIdentity): Promise<void>;
 }
 
 /** Revocation list adapter for stateless-JWT products (D16, Phase 3). */
@@ -192,6 +205,8 @@ export type AuditEventType =
   | "vibe.auth.user.linked"
   | "vibe.auth.role.changed"
   | "vibe.auth.logout"
+  | "vibe.auth.logout.held"
+  | "vibe.auth.session.rebound"
   | "vibe.auth.mode.changed"
   | "vibe.auth.breakglass.used"
   | "vibe.auth.breakglass.rotated"

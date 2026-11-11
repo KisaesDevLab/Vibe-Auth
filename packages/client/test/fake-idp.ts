@@ -34,6 +34,10 @@ interface PendingCode {
   state: string;
   /** prompt=login was requested: the ID token carries a fresh auth_time. */
   freshAuth: boolean;
+  /** The OP session the ID token names. */
+  sid?: string;
+  /** Old OP session to log out after the token response ("after-callback"). */
+  logoutAfter?: string;
 }
 
 export class FakeIdp {
@@ -53,6 +57,19 @@ export class FakeIdp {
   public sessionAuthTime = Math.floor(Date.now() / 1000) - 3600;
   /** Set to ignore prompt=login and keep reporting `sessionAuthTime` (a misbehaving OP). */
   public ignorePromptLogin = false;
+  /**
+   * Like authentik 2026.8 (1.0.21): prompt=login signs the user in again, which REPLACES the OP
+   * session and sends back-channel logout for the old sid to `backchannelUri`, either before the
+   * browser is sent back to the product (what authentik does) or just after the token exchange.
+   */
+  public replaceSessionOnPromptLogin: false | "before-callback" | "after-callback" = false;
+  public backchannelUri?: string;
+  /** The OP's current session id (default "sid-" + sub). */
+  public currentSid?: string;
+  /** Back-channel logouts sent by a replaced session, to await in tests. */
+  public sentLogouts: Promise<number>[] = [];
+  /** Whose each OP session is (a logout token names the old session's user). */
+  private sidOwner = new Map<string, string>();
 
   constructor(opts: FakeIdpOptions) {
     this.opts = opts;
@@ -90,7 +107,7 @@ export class FakeIdp {
       groups: u.groups,
       roles: u.roles,
       amr: u.amr ?? ["pwd"],
-      sid: o.sid ?? "sid-" + u.sub,
+      sid: o.sid ?? this.currentSid ?? "sid-" + u.sub,
       ...(o.nonce ? { nonce: o.nonce } : {}),
       ...(o.accessToken ? { at_hash: atHash(o.accessToken) } : {}),
       ...o.extra,
@@ -119,6 +136,14 @@ export class FakeIdp {
       .setJti(randomUUID());
     if (o.sub) j.setSubject(o.sub);
     return j.sign(this.priv);
+  }
+
+  /** POST a back-channel logout for `sid` to the product, as the OP does. Resolves to the HTTP status. */
+  async sendBackchannelLogout(sid: string, sub = this.sidOwner.get(sid) ?? this.user.sub): Promise<number> {
+    if (!this.backchannelUri) throw new Error("backchannelUri not set");
+    const token = await this.logoutToken({ sub, sid });
+    const r = await fetch(this.backchannelUri, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ logout_token: token }) });
+    return r.status;
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse) {
@@ -165,8 +190,25 @@ export class FakeIdp {
       if (q.get("client_id") !== this.opts.clientId) return send(400, { error: "unauthorized_client" });
       if (q.get("code_challenge_method") !== "S256") return send(400, { error: "invalid_request", error_description: "PKCE S256 required" });
       const code = randomUUID();
-      const freshAuth = !this.ignorePromptLogin && (q.get("prompt") === "login" || q.get("max_age") === "0");
-      this.codes.set(code, { redirectUri, nonce: q.get("nonce") ?? "", codeChallenge: q.get("code_challenge") ?? undefined, state, freshAuth });
+      if (this.replaceSessionOnPromptLogin && !this.currentSid) {
+        // The first sign-in starts the OP session.
+        this.currentSid = "sid-" + this.user.sub;
+        this.sidOwner.set(this.currentSid, this.user.sub);
+      }
+      const freshAuth = !this.ignorePromptLogin && (q.get("prompt") === "login" || (q.get("max_age") !== null && Number(q.get("max_age")) < 3600));
+      let sid: string | undefined;
+      let logoutAfter: string | undefined;
+      if (freshAuth && this.replaceSessionOnPromptLogin && this.currentSid) {
+        const old = this.currentSid;
+        this.currentSid = sid = "sid-" + randomUUID();
+        this.sidOwner.set(sid, this.user.sub);
+        if (this.replaceSessionOnPromptLogin === "before-callback") {
+          const sent = this.sendBackchannelLogout(old);
+          this.sentLogouts.push(sent);
+          await sent;
+        } else logoutAfter = old;
+      }
+      this.codes.set(code, { redirectUri, nonce: q.get("nonce") ?? "", codeChallenge: q.get("code_challenge") ?? undefined, state, freshAuth, sid, logoutAfter });
       target.searchParams.set("code", code);
       target.searchParams.set("state", state);
       res.writeHead(302, { location: target.toString() });
@@ -195,8 +237,14 @@ export class FakeIdp {
       const accessToken = "at-" + randomUUID();
       this.accessTokens.set(accessToken, this.user.sub);
       const authTime = pc.freshAuth ? Math.floor(Date.now() / 1000) : this.sessionAuthTime;
-      const idToken = await this.signIdToken({ nonce: pc.nonce, accessToken, extra: { auth_time: authTime } });
-      return send(200, { access_token: accessToken, token_type: "Bearer", expires_in: 300, id_token: idToken, scope: "openid profile email" });
+      const idToken = await this.signIdToken({ nonce: pc.nonce, accessToken, sid: pc.sid, extra: { auth_time: authTime } });
+      send(200, { access_token: accessToken, token_type: "Bearer", expires_in: 300, id_token: idToken, scope: "openid profile email" });
+      if (pc.logoutAfter) {
+        const old = pc.logoutAfter;
+        // After the product has finished its callback with these tokens.
+        this.sentLogouts.push(new Promise((r) => setTimeout(r, 150)).then(() => this.sendBackchannelLogout(old)));
+      }
+      return;
     }
     if (path.endsWith("/userinfo/")) {
       const t = (req.headers.authorization ?? "").replace(/^Bearer /, "");

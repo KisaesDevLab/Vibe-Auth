@@ -32,6 +32,8 @@ export async function migrate(): Promise<void> {
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at TIMESTAMPTZ NOT NULL
   )`);
+  // Step-up (reauth=1): when this session last re-proved itself at the IdP.
+  await query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_step_up_at TIMESTAMPTZ`);
   await query(`CREATE TABLE IF NOT EXISTS audit_log (id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), type TEXT NOT NULL, payload JSONB NOT NULL)`);
   // The package's SQL fragment (auth_identities, auth_settings, auth_revocations).
   const sqlPath = require.resolve("@kisaesdevlab/vibe-auth/sql/auth_identities.sql");

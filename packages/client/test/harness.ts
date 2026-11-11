@@ -82,6 +82,15 @@ export class MemorySessions implements SessionAdapter {
     }
     return n;
   }
+  /** Sessions moved to a new OP session (1.0.21), by product sid. */
+  rebinds = new Map<string, SessionIdentity>();
+  async rebindIdentity(req: express.Request, _res: express.Response, identity: SessionIdentity) {
+    const sid = cookie(req, "sid");
+    const row = sid ? this.store.get(sid) : undefined;
+    if (!sid || !row) throw new Error("no session to move");
+    row.identity = identity;
+    this.rebinds.set(sid, identity);
+  }
   async markStepUp(req: express.Request, _res: express.Response, _user: VibeUser, _identity: SessionIdentity) {
     const sid = cookie(req, "sid");
     if (!sid || !this.store.has(sid)) throw new Error("no session to mark");

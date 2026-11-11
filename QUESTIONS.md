@@ -9,8 +9,13 @@ The Q&A session of 2026-09-16 was folded into the build plan as D25–D30, and t
 - **H4** — runbooks in `docs/firm/runbooks.md` still need execution by a non-author.
 - **Follow-up: restore ordering in Vibe Backup** (separate PR in `Vibe-Backup`: ordering field in the contract + multi-module restore).
 - **Follow-up: the Appliance verifies break-glass** (D33) — the `oidc_only` guard, the console pill and `identity status` should prove the stored `VIBE_BREAKGLASS_PASSWORD_<SLUG>` signs in, so a product database restore that breaks the pair is caught. Not built yet; lands in `Vibe-Appliance`. Register §A and §D.
-- **Step-up re-authentication on authentik (v1.0.20 finding)** — with `prompt=login` authentik signs the user in again, replaces its session and sends back-channel logout for the old one, ending the product session (seen in integration 7a for Test connection). `completeReauth` needs that session to survive, so step-up (`reauth=1`, Time & Billing's 30-minute gates) is likely to fail with `reauth_session_changed` on authentik (from reading the code; the ref-app has no `markStepUp`, so it is not exercised yet). Options: (a) the engine ignores a back-channel logout for a user with a pending re-auth or test from the same browser started in the last few minutes, and rebinds the session to the new `sid` on the callback (a real sign-out in that window is then delayed, not lost, if the re-auth is abandoned and expires); (b) step-up without `prompt=login`, e.g. an authentik flow with only the validation stage bound to a separate application; (c) accept that step-up signs the user out and back in. Needs a decision before Time & Billing relies on step-up.
 - **Follow-up: per-product break-glass factor** (D33) — each plan under `docs/integration-plans/` must state password-only or TOTP at provisioning; Time & Billing's plan must provision a factor.
+
+## Answered 2026-11-10
+
+| Question | Decision |
+|---|---|
+| Step-up and Test connection on authentik: its re-sign-in logs the old session out over back-channel, ending the product session (found with Vibe Portal, v1.0.20) | **Keep the session**: hold that one session's logout during the re-sign-in, then move the session to authentik's new one (D34, v1.0.21) |
 
 ## Answered 2026-10-02
 

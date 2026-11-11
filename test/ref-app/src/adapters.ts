@@ -136,6 +136,17 @@ export const sessions: SessionAdapter = {
     const r = await query(`DELETE FROM sessions WHERE ${clauses.join(" OR ")} RETURNING sid`, params);
     return r.length;
   },
+  // 1.0.21: keep this session across an IdP re-sign-in (step-up, Test connection).
+  async rebindIdentity(req: Request, _res: Response, identity: SessionIdentity) {
+    const sid = readCookie(req, COOKIE);
+    if (!sid) throw new Error("no session");
+    const r = await query("UPDATE sessions SET oidc_sid = $2, id_token = $3 WHERE sid = $1 RETURNING sid", [sid, identity.sid ?? null, identity.idToken ?? null]);
+    if (!r.length) throw new Error("no session");
+  },
+  async markStepUp(req: Request) {
+    const sid = readCookie(req, COOKIE);
+    if (sid) await query("UPDATE sessions SET last_step_up_at = now() WHERE sid = $1", [sid]);
+  },
   async issueToken(user, identity) {
     // Desktop clients: the sid doubles as a bearer token (Authorization: Bearer <sid>).
     const sid = randomBytes(24).toString("base64url");

@@ -19,7 +19,7 @@ import { discover, type ResolvedProvider } from "./discovery.js";
 import { formBody, header, html, json, parseUrl, redirect, requestOrigin, safeReturnTo, type HttpRequest, type HttpResponse } from "./http.js";
 import { linkOrProvision } from "./identity.js";
 import { idpUnavailablePage, loggedOutPage, loginErrorPage, loopbackHandoffPage, testResultPage } from "./pages.js";
-import { MemoryExchangeStore, MemoryPendingLoginStore, codeChallengeS256, newPendingLogin, type PendingLogin, type PendingLoginStore } from "./pkce.js";
+import { MemoryExchangeStore, MemoryPendingLoginStore, PENDING_TTL_MS, codeChallengeS256, newPendingLogin, type PendingLogin, type PendingLoginStore } from "./pkce.js";
 import { amrSatisfiesMfa, resolveRole } from "./roles.js";
 import { MemorySettingsStore, plaintextSecretWrap, resolveEffectiveConfig } from "./settings.js";
 import { exchangeCode, fetchUserInfo, validateIdToken, validateLogoutToken, type IdTokenClaims } from "./tokens.js";
@@ -73,6 +73,22 @@ export interface VibeAuthOptions {
    * for `/auth/oidc/start?reauth=1` to count as a fresh re-authentication (default 120).
    */
   reauthMaxAgeSeconds?: number;
+  /**
+   * How long a back-channel logout for the session that started a step-up or Test connection is
+   * held (1.0.21; default: the pending-login lifetime, 5 minutes). Tests shorten it.
+   */
+  reauthHoldMs?: number;
+}
+
+/** A back-channel logout held while the browser that holds `sid` re-signs-in (1.0.21). */
+interface ReauthHold {
+  state: string;
+  sid: string;
+  issuer: string;
+  subject: string;
+  expiresAt: number;
+  held?: { sub?: string; sid: string; at: Date };
+  timer?: NodeJS.Timeout;
 }
 
 export interface AuthStatus {
@@ -120,6 +136,10 @@ export class VibeAuth {
   private pending: PendingLoginStore;
   private loopback = new MemoryExchangeStore<LoopbackSession>();
   private seenJti = new Map<string, number>();
+  /** Back-channel logouts held during a re-sign-in, by the OP `sid` they name (1.0.21). */
+  private holds = new Map<string, ReauthHold>();
+  /** Old OP sids whose product session moved to a new sid: a late logout for them ends nothing else. */
+  private superseded = new Map<string, number>();
   private loopbackPortOk: (p: number) => boolean;
   private fetchImpl: typeof fetch;
   private opts: VibeAuthOptions;
@@ -425,6 +445,15 @@ export class VibeAuth {
       );
     }
 
+    // A re-sign-in from a browser that holds an SSO session (step-up, Test connection): hold the
+    // OP's back-channel logout for exactly that session while it runs, so the product session
+    // survives the OP replacing its own session (1.0.21). Only when the product can move it.
+    let holdOn: SessionIdentity | null = null;
+    if ((reauth || test) && this.session.rebindIdentity && this.session.currentIdentity) {
+      const cur = await this.session.currentIdentity(req.raw.req as never).catch(() => null);
+      if (cur?.sid && cur.issuer === provider.issuer) holdOn = cur;
+    }
+
     const pending = newPendingLogin({
       returnTo: safeReturnTo(query.get("return_to"), this.opts.defaultReturnTo ?? this.basePath + "/"),
       test,
@@ -432,8 +461,10 @@ export class VibeAuth {
       actorId,
       reauth: reauth || undefined,
       userId: reauthUserId,
+      holdSid: holdOn?.sid,
     });
     await this.pending.put(pending);
+    if (holdOn?.sid) this.addHold(pending, holdOn as SessionIdentity & { sid: string });
 
     const url = new URL(provider.authorizationEndpoint);
     url.searchParams.set("response_type", "code");
@@ -446,9 +477,13 @@ export class VibeAuth {
     url.searchParams.set("code_challenge_method", "S256");
     if (test) url.searchParams.set("prompt", "login");
     if (reauth) {
-      // Force a fresh authentication; max_age=0 makes a compliant OP re-prompt AND return auth_time.
+      // Force a fresh authentication. max_age is the window the callback accepts (not 0): authentik
+      // 2026.8 treats max_age=0 as unset, and honours prompt=login only once per authentik
+      // session (it never clears its "already re-signed-in" marker), so a second step-up would
+      // get no new sign-in. A positive max_age re-prompts whenever the last sign-in is older than
+      // the window; a sign-in inside the window is fresh enough by the same rule (1.0.21).
       url.searchParams.set("prompt", "login");
-      url.searchParams.set("max_age", "0");
+      url.searchParams.set("max_age", String(Math.max(1, Math.floor(this.opts.reauthMaxAgeSeconds ?? 120))));
     }
     return redirect(url.toString());
   }
@@ -463,7 +498,11 @@ export class VibeAuth {
     if (!pending) {
       return html(400, loginErrorPage({ title: "Sign-in expired", message: "This sign-in attempt has expired or was already used. Please try again.", loginPath: this.loginPath }));
     }
+    // The hold this re-sign-in owns (a newer re-sign-in from the same session takes it over).
+    const hold = pending.holdSid ? this.holds.get(pending.holdSid) : undefined;
+    const ownHold = hold && hold.state === pending.state ? hold : undefined;
     const fail = async (reason: string, message: string, extra: Record<string, unknown> = {}) => {
+      if (ownHold) await this.releaseHold(ownHold.sid, "failed");
       await this.audit("vibe.auth.login.failure", { method: "oidc", reason, issuer: oidc.issuer, ip: req.ip, ...extra });
       if (pending.test) return html(200, testResultPage({ ok: false, reason, message }));
       return html(401, loginErrorPage({ title: "Sign-in failed", message, loginPath: this.loginPath }));
@@ -518,7 +557,7 @@ export class VibeAuth {
     const emailVerified = claims.email_verified === true;
     const identity: SessionIdentity = { issuer: provider.issuer, subject: String(claims.sub), sid: claims.sid, idToken, amr: claims.amr };
 
-    if (pending.reauth) return this.completeReauth(req, pending, claims, identity, fail);
+    if (pending.reauth) return this.completeReauth(req, pending, claims, identity, fail, ownHold);
 
     if (pending.test) {
       const resolution = resolveRole({
@@ -531,6 +570,15 @@ export class VibeAuth {
       });
       const stored = (await this.settingsStore.get()) ?? {};
       await this.settingsStore.set({ ...stored, lastTestOkBy: pending.actorId, lastTestOkAt: new Date().toISOString() });
+      // The admin's own SSO session: kept when the test signed in as the same account; a test as
+      // another account carries out the OP's logout of the admin's session (the OP ended it).
+      if (ownHold) {
+        if (identity.issuer === ownHold.issuer && identity.subject === ownHold.subject && (await this.rebind(req, identity))) {
+          await this.releaseHold(ownHold.sid, "kept", identity.sid);
+        } else {
+          await this.releaseHold(ownHold.sid, "failed");
+        }
+      }
       return html(
         200,
         testResultPage({
@@ -619,6 +667,7 @@ export class VibeAuth {
     claims: IdTokenClaims,
     identity: SessionIdentity,
     fail: (reason: string, message: string, extra?: Record<string, unknown>) => Promise<HttpResponse>,
+    hold?: ReauthHold,
   ): Promise<HttpResponse> {
     const maxAge = this.opts.reauthMaxAgeSeconds ?? 120;
     const authTime = typeof claims.auth_time === "number" ? claims.auth_time : undefined;
@@ -639,6 +688,16 @@ export class VibeAuth {
     const user = await this.users.findById(pending.userId);
     if (!user || !user.active) return fail("inactive", "Your account is disabled.", { user_id: pending.userId });
     if (!this.session.markStepUp) return json(409, { error: "reauth_unsupported" });
+    // Held logout (1.0.21): the session moves to the OP's new session first. Only the same IdP
+    // account as the session's own counts (a linked second identity does not).
+    if (hold) {
+      if (identity.issuer !== hold.issuer || identity.subject !== hold.subject) {
+        return fail("reauth_subject_mismatch", "You re-authenticated as a different account. Please sign in again with your own account.", { sub: claims.sub, user_id: pending.userId });
+      }
+      if (!(await this.rebind(req, identity))) {
+        return fail("stepup_failed", "You re-authenticated, but this product could not record it. Try again, or contact your administrator.", { user_id: user.id, detail: "rebindIdentity failed" });
+      }
+    }
     try {
       await this.session.markStepUp(req.raw.req as never, req.raw.res as never, user, identity);
     } catch (err) {
@@ -646,6 +705,7 @@ export class VibeAuth {
       this.log.error("vibe-auth: session.markStepUp failed", { user_id: user.id, error: reason });
       return fail("stepup_failed", "You re-authenticated, but this product could not record it. Try again, or contact your administrator.", { user_id: user.id, detail: reason.slice(0, 200) });
     }
+    if (hold) await this.releaseHold(hold.sid, "kept", identity.sid);
     await this.identities.touch(identity.issuer, identity.subject, new Date());
     await this.audit("vibe.auth.stepup.success", { user_id: user.id, method: "oidc", issuer: identity.issuer, sub: claims.sub, amr: claims.amr ?? [], auth_time: authTime, ip: req.ip });
     return redirect(pending.returnTo);
@@ -705,6 +765,35 @@ export class VibeAuth {
       this.seenJti.set(parsed.jti, Date.now());
     }
 
+    const done: HttpResponse = { status: 200, headers: { "cache-control": "no-store" }, body: "" };
+    if (parsed.sid) {
+      this.sweepHolds();
+      // The product session already moved to the OP's new session: end only what is still on
+      // the old sid (never by subject or user, which would end the moved session).
+      if (this.superseded.has(parsed.sid)) {
+        await this.endIdpSessions({ sid: parsed.sid }, new Date(), "superseded");
+        return done;
+      }
+      // A re-sign-in from exactly this OP session is under way: hold the logout until it ends.
+      const hold = this.holds.get(parsed.sid);
+      if (hold && (!parsed.sub || parsed.sub === hold.subject)) {
+        if (!hold.held) {
+          hold.held = { sub: parsed.sub, sid: parsed.sid, at: new Date() };
+          hold.timer = setTimeout(() => void this.releaseHold(hold.sid, "expired"), Math.max(0, hold.expiresAt - Date.now()) + 1000);
+          hold.timer.unref?.();
+        }
+        await this.audit("vibe.auth.logout.held", { method: "oidc", initiated_by: "idp", sid: parsed.sid, until: new Date(hold.expiresAt).toISOString() });
+        return done;
+      }
+    }
+    await this.endIdpSessions(parsed, new Date());
+    return done;
+  }
+
+  /** Carry out an OP back-channel logout: end the product sessions it names, revoke tokens. */
+  private async endIdpSessions(parsed: { sub?: string; sid?: string }, revokedAt: Date, how?: "superseded" | "held_failed" | "held_expired"): Promise<void> {
+    const provider = this.provider;
+    if (!provider) return;
     let userId: string | undefined;
     if (parsed.sub) {
       const rec = await this.identities.findByIssuerSubject(provider.issuer, parsed.sub);
@@ -715,11 +804,66 @@ export class VibeAuth {
       ended = await this.session.destroyByIdentity({ issuer: provider.issuer, subject: parsed.sub, sid: parsed.sid, userId });
     }
     if (this.revocations && (userId || parsed.sid)) {
-      // Reject tokens issued up to now (a later login stays valid); the record lives 24 h, longer than any product token.
-      await this.revocations.revoke({ userId, sid: parsed.sid }, new Date(), new Date(Date.now() + 24 * 60 * 60_000));
+      // Reject tokens issued up to the logout (a later login stays valid); the record lives 24 h, longer than any product token.
+      await this.revocations.revoke({ userId, sid: parsed.sid }, revokedAt, new Date(Date.now() + 24 * 60 * 60_000));
     }
-    await this.audit("vibe.auth.logout", { user_id: userId, method: "oidc", initiated_by: "idp", sid: parsed.sid, sessions_ended: ended });
-    return { status: 200, headers: { "cache-control": "no-store" }, body: "" };
+    await this.audit("vibe.auth.logout", { user_id: userId, method: "oidc", initiated_by: "idp", sid: parsed.sid, sessions_ended: ended, ...(how ? { how } : {}) });
+  }
+
+  // ---------------------------------------------------------------- held logout during re-sign-in (1.0.21)
+
+  private holdMs(): number {
+    return this.opts.reauthHoldMs ?? PENDING_TTL_MS;
+  }
+
+  private addHold(pending: PendingLogin, cur: SessionIdentity & { sid: string }) {
+    this.sweepHolds();
+    const prev = this.holds.get(cur.sid);
+    const expiresAt = pending.createdAt + this.holdMs();
+    if (prev) {
+      // A newer re-sign-in from the same session takes the hold over (and any logout already held).
+      prev.state = pending.state;
+      prev.expiresAt = expiresAt;
+      if (prev.timer) {
+        clearTimeout(prev.timer);
+        prev.timer = setTimeout(() => void this.releaseHold(prev.sid, "expired"), Math.max(0, expiresAt - Date.now()) + 1000);
+        prev.timer.unref?.();
+      }
+      return;
+    }
+    if (this.holds.size >= 5000) return; // never unbounded; past this a re-sign-in simply is not protected
+    this.holds.set(cur.sid, { state: pending.state, sid: cur.sid, issuer: cur.issuer, subject: cur.subject, expiresAt });
+  }
+
+  /** End a hold: "kept" drops the held logout (the session moved); otherwise it is carried out. */
+  private async releaseHold(sid: string, outcome: "kept" | "failed" | "expired", newSid?: string): Promise<void> {
+    const hold = this.holds.get(sid);
+    if (!hold) return;
+    this.holds.delete(sid);
+    if (hold.timer) clearTimeout(hold.timer);
+    if (outcome === "kept") {
+      if (newSid !== sid) this.superseded.set(sid, Date.now() + this.holdMs());
+      await this.audit("vibe.auth.session.rebound", { method: "oidc", from_sid: sid, to_sid: newSid, logout_was_held: !!hold.held });
+      return;
+    }
+    if (hold.held) await this.endIdpSessions({ sub: hold.held.sub, sid: hold.held.sid }, hold.held.at, outcome === "expired" ? "held_expired" : "held_failed");
+  }
+
+  private sweepHolds() {
+    const now = Date.now();
+    for (const [sid, hold] of this.holds) if (!hold.held && hold.expiresAt < now) this.holds.delete(sid);
+    for (const [sid, until] of this.superseded) if (until < now) this.superseded.delete(sid);
+  }
+
+  /** Move the current product session to the OP's new session; false if the product refused. */
+  private async rebind(req: HttpRequest, identity: SessionIdentity): Promise<boolean> {
+    try {
+      await this.session.rebindIdentity!(req.raw.req as never, req.raw.res as never, identity);
+      return true;
+    } catch (err) {
+      this.log.error("vibe-auth: session.rebindIdentity failed", { error: err instanceof Error ? err.message : String(err) });
+      return false;
+    }
   }
 
   private sweepJti() {

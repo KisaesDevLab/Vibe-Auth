@@ -21,6 +21,8 @@ export interface PendingLogin {
    */
   reauth?: boolean;
   userId?: string;
+  /** The OP session (`sid`) a back-channel logout is held for during this re-sign-in (1.0.21). */
+  holdSid?: string;
 }
 
 export interface PendingLoginStore {

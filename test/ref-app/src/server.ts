@@ -30,6 +30,8 @@ async function main() {
     loginPath: "/login",
     breakglassLoginPath: "/login/local",
     trustProxy: true,
+    // Test stack: a short step-up window so the integration can check a second step-up after it.
+    ...(process.env.REF_REAUTH_MAX_AGE ? { reauthMaxAgeSeconds: Number(process.env.REF_REAUTH_MAX_AGE) } : {}),
   });
 
   const app = express();
@@ -78,6 +80,18 @@ async function main() {
   };
   app.get(`${BASE_PATH}/api/me`, requireAuth, (req, res) => res.json({ user: (req as express.Request & { user?: unknown }).user }));
   app.get(`${BASE_PATH}/api/secret`, requireAuth, (_req, res) => res.json({ secret: "42" }));
+  // Test stack only: the auth events since a time, to see the order of logout and step-up.
+  app.get(`${BASE_PATH}/api/audit-tail`, async (req, res) => {
+    const since = typeof req.query.since === "string" ? req.query.since : new Date(0).toISOString();
+    const rows = await query("SELECT at, type, payload FROM audit_log WHERE at >= $1 ORDER BY id", [since]);
+    res.json(rows.map((r) => ({ at: r.at, type: r.type, sid: (r.payload as { sid?: string }).sid, reason: (r.payload as { reason?: string }).reason })));
+  });
+  // Step-up status for the integration test: when this browser's session last re-authenticated.
+  app.get(`${BASE_PATH}/api/step-up`, requireAuth, async (req, res) => {
+    const sid = (req.headers.cookie ?? "").split(";").map((p) => p.trim()).find((p) => p.startsWith("ref_sid="))?.slice(8);
+    const row = sid ? (await query("SELECT last_step_up_at, oidc_sid FROM sessions WHERE sid = $1", [decodeURIComponent(sid)]))[0] : undefined;
+    res.json({ lastStepUpAt: row?.last_step_up_at ?? null, oidcSid: row?.oidc_sid ?? null });
+  });
 
   // SPA
   const ui = join(__dirname, "ui");
