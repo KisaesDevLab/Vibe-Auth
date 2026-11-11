@@ -11,6 +11,14 @@ The Q&A session of 2026-09-16 was folded into the build plan as D25–D30, and t
 - **Follow-up: the Appliance verifies break-glass** (D33) — the `oidc_only` guard, the console pill and `identity status` should prove the stored `VIBE_BREAKGLASS_PASSWORD_<SLUG>` signs in, so a product database restore that breaks the pair is caught. Not built yet; lands in `Vibe-Appliance`. Register §A and §D.
 - **Follow-up: per-product break-glass factor** (D33) — each plan under `docs/integration-plans/` must state password-only or TOTP at provisioning; Time & Billing's plan must provision a factor.
 
+- **Mode precedence (found with D35)** — a mode saved on a product's Settings → Authentication beats `VIBE_AUTH_MODE`, so after a page switch to `oidc_only` the documented recovery `sudo vibe identity mode <slug> local` changes the env and nothing else. A fix needs a rule for "who changed it last" (for example the Appliance stamping when it set the mode), so it waits for an owner decision.
+
+## Answered 2026-11-11
+
+| Question | Decision |
+|---|---|
+| A client ID saved on the settings page silently beat the Appliance's registration ("Client ID Error" on Vibe Portal) | **The environment wins** for issuer, internal base, client ID and secret once it sets the client ID (D35, v1.0.23) |
+
 ## Answered 2026-11-10
 
 | Question | Decision |

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeIdp } from "./fake-idp.js";
+import { MemorySettingsStore } from "../src/index.js";
 import { loginViaBrowser, startHarness, type Harness } from "./harness.js";
 
 let idp: FakeIdp;
@@ -251,6 +252,67 @@ describe("settings API (Phase 4)", () => {
     res = await put({ requireMfaAmr: false, mfaAck: true });
     expect(res.status).toBe(200);
     expect(h.events.some((e) => e.type === "vibe.auth.mfa.enforcement.disabled")).toBe(true);
+  });
+});
+
+describe("the environment owns the connection (D35)", () => {
+  async function adminCookie(base: string) {
+    await h.users.createLocalUser({ username: "root", email: "r@x", name: "R", role: "admin", password: "pw" });
+    const res = await fetch(base + "/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "root", password: "pw" }) });
+    return res.headers.get("set-cookie")!.split(";")[0]!;
+  }
+  const put = (cookie: string, body: unknown) =>
+    fetch(h.base + "/auth/settings", { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const startClientId = async () => {
+    const r = await fetch(h.base + "/auth/oidc/start", { redirect: "manual" });
+    return new URL(r.headers.get("location")!).searchParams.get("client_id");
+  };
+
+  it("a re-registration wins over a client ID an older settings page saved", async () => {
+    // Registered once (client "old-client"); an admin saves the settings page, which (before D35)
+    // posted the issuer and client ID it had loaded from env along with the button label and roles.
+    idp = await new FakeIdp({ clientId: "ref-client", clientSecret: "s3cret", user: { ...baseUser } }).start();
+    const settings = new MemorySettingsStore();
+    h = await startHarness({ VIBE_AUTH_MODE: "both", VIBE_OIDC_ISSUER: idp.issuer, VIBE_OIDC_CLIENT_ID: "old-client", VIBE_OIDC_CLIENT_SECRET: "old" }, { settings });
+    const cookie = await adminCookie(h.base);
+    const res = await put(cookie, { issuer: idp.issuer, internalBase: "http://stale:9000", clientId: "old-client", clientSecret: "old", idpName: "The Firm", allowJit: true, defaultRole: "", roleMap: { "vibe-partner": "reviewer" } });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { managed: boolean; stored: Record<string, unknown> };
+    expect(d.managed).toBe(true);
+    expect(d.stored.clientId).toBeUndefined();
+    expect(d.stored.issuer).toBeUndefined();
+    expect(d.stored.internalBase).toBeUndefined();
+    expect(d.stored.hasSecret).toBe(false);
+    expect(d.stored.idpName).toBe("The Firm");
+    await h.stop();
+
+    // A copy saved by an older page is still in the store; the appliance registers again
+    // ("ref-client") and restarts the product.
+    await settings.set({ ...(await settings.get()), clientId: "old-client", issuer: "https://elsewhere.example/", internalBase: "http://stale:9000" });
+    const warns: string[] = [];
+    h = await startHarness(
+      { VIBE_AUTH_MODE: "both", VIBE_OIDC_ISSUER: idp.issuer, VIBE_OIDC_CLIENT_ID: "ref-client", VIBE_OIDC_CLIENT_SECRET: "s3cret" },
+      { settings, logger: { info() {}, warn: (m) => void warns.push(m), error() {} } },
+    );
+    expect(warns.some((m) => /saved on the settings page are ignored/.test(m))).toBe(true);
+    expect(await startClientId()).toBe("ref-client");
+    const login = await loginViaBrowser(h.base);
+    expect(login.location).toBe("/");
+    expect((await h.users.findByEmail("kurt@kisaes.com"))?.role).toBe("reviewer"); // the saved role map still applies
+  });
+
+  it("without VIBE_OIDC_CLIENT_ID the settings page still sets the connection", async () => {
+    idp = await new FakeIdp({ clientId: "page-client", clientSecret: "pg", user: { ...baseUser } }).start();
+    h = await startHarness({ VIBE_AUTH_MODE: "local" });
+    const cookie = await adminCookie(h.base);
+    const res = await put(cookie, { issuer: idp.issuer, clientId: "page-client", clientSecret: "pg", mode: "both" });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { managed: boolean; stored: { clientId?: string; hasSecret: boolean } };
+    expect(d.managed).toBe(false);
+    expect(d.stored.clientId).toBe("page-client");
+    expect(d.stored.hasSecret).toBe(true);
+    expect(await startClientId()).toBe("page-client");
+    expect((await loginViaBrowser(h.base)).location).toBe("/");
   });
 });
 

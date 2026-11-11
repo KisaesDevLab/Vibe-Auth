@@ -18,6 +18,8 @@ export interface AuthStatusDto {
 export interface AuthSettingsDto {
   mode: "local" | "both" | "oidc_only";
   modes: readonly string[];
+  /** D35: the environment owns issuer, internal base, client ID and secret (absent from older servers). */
+  managed?: boolean;
   env: { issuer?: string; clientId?: string; hasSecret: boolean; internalBase?: string; mode: string };
   stored: {
     mode?: string;

@@ -21,7 +21,7 @@ import { linkOrProvision } from "./identity.js";
 import { idpUnavailablePage, loggedOutPage, loginErrorPage, loopbackHandoffPage, testResultPage } from "./pages.js";
 import { MemoryExchangeStore, MemoryPendingLoginStore, PENDING_TTL_MS, codeChallengeS256, newPendingLogin, type PendingLogin, type PendingLoginStore } from "./pkce.js";
 import { amrSatisfiesMfa, resolveRole } from "./roles.js";
-import { MemorySettingsStore, plaintextSecretWrap, resolveEffectiveConfig } from "./settings.js";
+import { MemorySettingsStore, envManaged, ignoredStoredConnection, plaintextSecretWrap, resolveEffectiveConfig } from "./settings.js";
 import { exchangeCode, fetchUserInfo, validateIdToken, validateLogoutToken, type IdTokenClaims } from "./tokens.js";
 
 export interface Logger {
@@ -192,6 +192,9 @@ export class VibeAuth {
    */
   async start(): Promise<void> {
     await this.reloadConfig();
+    // D35: say so when a value saved on the settings page no longer applies.
+    const ignored = ignoredStoredConnection(this.env, await this.settingsStore.get());
+    if (ignored.length) this.log.warn("vibe-auth: the environment sets VIBE_OIDC_CLIENT_ID, so these values saved on the settings page are ignored (the next settings save removes them)", { ignored });
     if (this.cfg.mode === "oidc_only") {
       const bg = await this.users.findByUsername(this.cfg.breakglassUsername);
       if (!bg || !bg.active) {
@@ -912,6 +915,8 @@ export class VibeAuth {
     return json(200, {
       mode: this.cfg.mode,
       modes: AUTH_MODES,
+      /** D35: the environment owns issuer, internal base, client ID and secret; the page shows them read-only. */
+      managed: envManaged(this.env),
       env: {
         issuer: this.env.VIBE_OIDC_ISSUER,
         clientId: this.env.VIBE_OIDC_CLIENT_ID,
@@ -976,24 +981,31 @@ export class VibeAuth {
     const str = (k: string) => (typeof body[k] === "string" ? (body[k] as string).trim() : undefined);
     const has = (k: string) => Object.prototype.hasOwnProperty.call(body, k);
 
-    if (has("issuer")) {
+    // D35: the environment owns the connection. Every shipped settings page posts these fields on
+    // each save (copied from env when the page loaded), so drop them quietly, and any copies saved
+    // before, rather than refuse the save.
+    const managed = envManaged(this.env);
+    if (managed) {
+      for (const k of ["issuer", "internalBase", "clientId", "clientSecretWrapped"] as const) delete next[k];
+    }
+    if (has("issuer") && !managed) {
       const v = str("issuer");
       if (!v) delete next.issuer;
       else if (!/^https?:\/\//.test(v)) errors.push("issuer must be an http(s) URL");
       else next.issuer = v.replace(/\/+$/, "") + "/";
     }
-    if (has("internalBase")) {
+    if (has("internalBase") && !managed) {
       const v = str("internalBase");
       if (!v) delete next.internalBase;
       else if (!/^https?:\/\//.test(v)) errors.push("internalBase must be an http(s) URL");
       else next.internalBase = v.replace(/\/+$/, "");
     }
-    if (has("clientId")) {
+    if (has("clientId") && !managed) {
       const v = str("clientId");
       if (v) next.clientId = v;
       else delete next.clientId;
     }
-    if (has("clientSecret")) {
+    if (has("clientSecret") && !managed) {
       const v = typeof body.clientSecret === "string" ? body.clientSecret : "";
       if (v) next.clientSecretWrapped = await this.secretWrap.wrap(v);
       else if (body.clientSecret === null) delete next.clientSecretWrapped;
@@ -1042,8 +1054,8 @@ export class VibeAuth {
       const v = str("mode") as AuthMode | undefined;
       if (!v || !AUTH_MODES.includes(v)) errors.push("mode must be one of local, both, oidc_only");
       else if (v !== this.cfg.mode) {
-        const issuer = next.issuer ?? this.env.VIBE_OIDC_ISSUER;
-        const clientId = next.clientId ?? this.env.VIBE_OIDC_CLIENT_ID;
+        const issuer = managed ? this.env.VIBE_OIDC_ISSUER : (next.issuer ?? this.env.VIBE_OIDC_ISSUER);
+        const clientId = managed ? this.env.VIBE_OIDC_CLIENT_ID : (next.clientId ?? this.env.VIBE_OIDC_CLIENT_ID);
         if (v !== "local" && (!issuer || !clientId)) errors.push("issuer and clientId are required before enabling single sign-on");
         if (v === "oidc_only") {
           const bg = await this.users.findByUsername(this.cfg.breakglassUsername);

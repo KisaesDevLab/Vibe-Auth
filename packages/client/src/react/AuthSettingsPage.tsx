@@ -53,9 +53,10 @@ export function AuthSettingsPage(p: AuthSettingsPageProps) {
     try {
       const d = await client.settings();
       setData(d);
-      setIssuer(d.stored.issuer ?? d.env.issuer ?? "");
-      setInternalBase(d.stored.internalBase ?? d.env.internalBase ?? "");
-      setClientId(d.stored.clientId ?? d.env.clientId ?? "");
+      // D35: once the environment sets the client ID it owns the connection; show what applies.
+      setIssuer(d.managed ? (d.effective?.issuer ?? d.env.issuer ?? "") : (d.stored.issuer ?? d.env.issuer ?? ""));
+      setInternalBase(d.managed ? (d.effective?.internalBase ?? d.env.internalBase ?? "") : (d.stored.internalBase ?? d.env.internalBase ?? ""));
+      setClientId(d.managed ? (d.effective?.clientId ?? d.env.clientId ?? "") : (d.stored.clientId ?? d.env.clientId ?? ""));
       setIdpName(d.stored.idpName ?? d.effective?.idpName ?? "");
       setAllowJit(d.effective?.allowJit ?? true);
       setRequireMfa(d.effective?.requireMfaAmr ?? false);
@@ -101,10 +102,8 @@ export function AuthSettingsPage(p: AuthSettingsPageProps) {
 
   const saveConnection = () =>
     save({
-      issuer,
-      internalBase,
-      clientId,
-      ...(clientSecret ? { clientSecret } : {}),
+      // D35: never copy the environment's connection into stored settings.
+      ...(data?.managed ? {} : { issuer, internalBase, clientId, ...(clientSecret ? { clientSecret } : {}) }),
       idpName,
       allowJit,
       defaultRole: defaultRole || "",
@@ -198,23 +197,28 @@ export function AuthSettingsPage(p: AuthSettingsPageProps) {
         <div style={s.row}>
           <span style={s.pill}>{data.idp.reachable ? "reachable" : "unreachable"}</span>
           {data.idp.lastError && <span style={s.note}>{data.idp.lastError}</span>}
-          {data.env.issuer && <span style={s.pill}>configured by console</span>}
+          {data.managed && <span style={s.pill}>set by the appliance</span>}
         </div>
+        {data.managed && (
+          <p className={cn("note")} style={st("note", "note")}>
+            The appliance registered this product with Vibe Auth, so it sets the issuer, client ID and secret. To change them, register the product again from the appliance.
+          </p>
+        )}
         <label className={cn("label")} style={st("label", "label")}>
           Issuer URL
-          <input className={cn("input")} style={st("input", "input")} value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="https://auth.firm.example/application/o/vibe-tb/" />
+          <input className={cn("input")} style={st("input", "input")} value={issuer} readOnly={!!data.managed} onChange={(e) => setIssuer(e.target.value)} placeholder="https://auth.firm.example/application/o/vibe-tb/" />
         </label>
         <label className={cn("label")} style={st("label", "label")}>
           Internal base URL (optional, server-to-server)
-          <input className={cn("input")} style={st("input", "input")} value={internalBase} onChange={(e) => setInternalBase(e.target.value)} placeholder="http://vibe-auth-authentik-server:9000" />
+          <input className={cn("input")} style={st("input", "input")} value={internalBase} readOnly={!!data.managed} onChange={(e) => setInternalBase(e.target.value)} placeholder="http://vibe-auth-authentik-server:9000" />
         </label>
         <label className={cn("label")} style={st("label", "label")}>
           Client ID
-          <input className={cn("input")} style={st("input", "input")} value={clientId} onChange={(e) => setClientId(e.target.value)} />
+          <input className={cn("input")} style={st("input", "input")} value={clientId} readOnly={!!data.managed} onChange={(e) => setClientId(e.target.value)} />
         </label>
         <label className={cn("label")} style={st("label", "label")}>
           Client secret {data.effective?.hasSecret ? <span style={s.pill}>set</span> : <span style={s.pill}>not set</span>}
-          <input className={cn("input")} style={st("input", "input")} type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="leave blank to keep" autoComplete="off" />
+          <input className={cn("input")} style={st("input", "input")} type="password" value={clientSecret} disabled={!!data.managed} onChange={(e) => setClientSecret(e.target.value)} placeholder={data.managed ? "set by the appliance" : "leave blank to keep"} autoComplete="off" />
         </label>
         <label className={cn("label")} style={st("label", "label")}>
           Button label
