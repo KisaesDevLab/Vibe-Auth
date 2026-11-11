@@ -21,7 +21,7 @@ import { linkOrProvision } from "./identity.js";
 import { idpUnavailablePage, loggedOutPage, loginErrorPage, loopbackHandoffPage, testResultPage } from "./pages.js";
 import { MemoryExchangeStore, MemoryPendingLoginStore, PENDING_TTL_MS, codeChallengeS256, newPendingLogin, type PendingLogin, type PendingLoginStore } from "./pkce.js";
 import { amrSatisfiesMfa, resolveRole } from "./roles.js";
-import { MemorySettingsStore, envManaged, ignoredStoredConnection, plaintextSecretWrap, resolveEffectiveConfig } from "./settings.js";
+import { MemorySettingsStore, envManaged, ignoredStoredConnection, modeManaged, plaintextSecretWrap, resolveEffectiveConfig } from "./settings.js";
 import { exchangeCode, fetchUserInfo, validateIdToken, validateLogoutToken, type IdTokenClaims } from "./tokens.js";
 
 export interface Logger {
@@ -194,7 +194,7 @@ export class VibeAuth {
     await this.reloadConfig();
     // D35: say so when a value saved on the settings page no longer applies.
     const ignored = ignoredStoredConnection(this.env, await this.settingsStore.get());
-    if (ignored.length) this.log.warn("vibe-auth: the environment sets VIBE_OIDC_CLIENT_ID, so these values saved on the settings page are ignored (the next settings save removes them)", { ignored });
+    if (ignored.length) this.log.warn("vibe-auth: the environment sets VIBE_OIDC_CLIENT_ID (and VIBE_AUTH_MODE), so these values saved on the settings page are ignored (the next settings save removes them)", { ignored });
     if (this.cfg.mode === "oidc_only") {
       const bg = await this.users.findByUsername(this.cfg.breakglassUsername);
       if (!bg || !bg.active) {
@@ -917,6 +917,8 @@ export class VibeAuth {
       modes: AUTH_MODES,
       /** D35: the environment owns issuer, internal base, client ID and secret; the page shows them read-only. */
       managed: envManaged(this.env),
+      /** D36: the environment sets the sign-in mode; the page shows it read-only. */
+      modeManaged: modeManaged(this.env),
       env: {
         issuer: this.env.VIBE_OIDC_ISSUER,
         clientId: this.env.VIBE_OIDC_CLIENT_ID,
@@ -988,6 +990,9 @@ export class VibeAuth {
     if (managed) {
       for (const k of ["issuer", "internalBase", "clientId", "clientSecretWrapped"] as const) delete next[k];
     }
+    // D36: the environment sets the mode; a copy saved before is removed.
+    const envMode = modeManaged(this.env);
+    if (envMode) delete next.mode;
     if (has("issuer") && !managed) {
       const v = str("issuer");
       if (!v) delete next.issuer;
@@ -1050,7 +1055,11 @@ export class VibeAuth {
     }
 
     let modeChange: { from: AuthMode; to: AuthMode } | null = null;
-    if (has("mode")) {
+    if (has("mode") && envMode) {
+      // The page shows the mode read-only; a change sent anyway is refused with the way to make it.
+      const v = str("mode");
+      if (v !== this.env.VIBE_AUTH_MODE) errors.push(`the appliance sets the sign-in mode: run sudo vibe identity mode <product> ${v ?? "<mode>"}`);
+    } else if (has("mode")) {
       const v = str("mode") as AuthMode | undefined;
       if (!v || !AUTH_MODES.includes(v)) errors.push("mode must be one of local, both, oidc_only");
       else if (v !== this.cfg.mode) {

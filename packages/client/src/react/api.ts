@@ -20,6 +20,8 @@ export interface AuthSettingsDto {
   modes: readonly string[];
   /** D35: the environment owns issuer, internal base, client ID and secret (absent from older servers). */
   managed?: boolean;
+  /** D36: the appliance sets the sign-in mode. */
+  modeManaged?: boolean;
   env: { issuer?: string; clientId?: string; hasSecret: boolean; internalBase?: string; mode: string };
   stored: {
     mode?: string;

@@ -195,7 +195,9 @@ describe("modes and guards (Phase 3)", () => {
 });
 
 describe("settings API (Phase 4)", () => {
-  beforeEach(() => boot({ VIBE_AUTH_MODE: "local" }));
+  // The mode is left out of the environment (empty counts as unset: local), so the page sets it
+  // (D36: with VIBE_AUTH_MODE in env as well as the client ID, the appliance would).
+  beforeEach(() => boot({ VIBE_AUTH_MODE: "" }));
 
   async function adminCookie() {
     await h.users.createLocalUser({ username: "root", email: "r@x", name: "R", role: "admin", password: "pw" });
@@ -252,6 +254,50 @@ describe("settings API (Phase 4)", () => {
     res = await put({ requireMfaAmr: false, mfaAck: true });
     expect(res.status).toBe(200);
     expect(h.events.some((e) => e.type === "vibe.auth.mfa.enforcement.disabled")).toBe(true);
+  });
+});
+
+describe("the appliance sets the sign-in mode (D36)", () => {
+  async function adminCookie(base: string) {
+    await h.users.createLocalUser({ username: "root", email: "r@x", name: "R", role: "admin", password: "pw" });
+    const res = await fetch(base + "/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "root", password: "pw" }) });
+    return res.headers.get("set-cookie")!.split(";")[0]!;
+  }
+
+  it("a mode saved on the page loses to vibe identity mode, and the page cannot change it", async () => {
+    // The page had switched to oidc_only; the appliance then set local (the documented recovery).
+    idp = await new FakeIdp({ clientId: "ref-client", clientSecret: "s3cret", user: { ...baseUser } }).start();
+    const settings = new MemorySettingsStore();
+    await settings.set({ mode: "oidc_only", idpName: "The Firm" });
+    const warns: string[] = [];
+    h = await startHarness(
+      { VIBE_AUTH_MODE: "local", VIBE_OIDC_ISSUER: idp.issuer, VIBE_OIDC_CLIENT_ID: "ref-client", VIBE_OIDC_CLIENT_SECRET: "s3cret" },
+      { settings, logger: { info() {}, warn: (m) => void warns.push(m), error() {} } },
+    );
+    expect(warns.some((m) => /saved on the settings page are ignored/.test(m))).toBe(true);
+    const status = (await (await fetch(h.base + "/auth/status")).json()) as { mode: string; localLoginVisible: boolean };
+    expect(status.mode).toBe("local");
+    expect(status.localLoginVisible).toBe(true);
+
+    const cookie = await adminCookie(h.base);
+    const got = (await (await fetch(h.base + "/auth/settings", { headers: { cookie } })).json()) as { modeManaged: boolean; mode: string };
+    expect(got).toEqual(expect.objectContaining({ modeManaged: true, mode: "local" }));
+    const put = (body: unknown) => fetch(h.base + "/auth/settings", { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body) });
+    const refused = await put({ mode: "both" });
+    expect(refused.status).toBe(400);
+    expect(((await refused.json()) as { errors: string[] }).errors.join(" ")).toMatch(/vibe identity mode/);
+    // Other settings still save, and the old stored mode goes.
+    const ok = await put({ idpName: "Firm SSO" });
+    expect(ok.status).toBe(200);
+    expect((await settings.get())?.mode).toBeUndefined();
+    expect((await settings.get())?.idpName).toBe("Firm SSO");
+  });
+
+  it("without the client ID in the environment the page still sets the mode", async () => {
+    h = await startHarness({ VIBE_AUTH_MODE: "local" });
+    const cookie = await adminCookie(h.base);
+    const got = (await (await fetch(h.base + "/auth/settings", { headers: { cookie } })).json()) as { modeManaged: boolean };
+    expect(got.modeManaged).toBe(false);
   });
 });
 

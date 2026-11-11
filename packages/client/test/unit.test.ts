@@ -11,6 +11,8 @@ describe("config", () => {
   it("parses env with defaults and normalises the issuer", () => {
     const c = loadEnvConfig({ VIBE_OIDC_ISSUER: "https://auth.x/application/o/tb", VIBE_OIDC_REQUIRE_MFA_AMR: "yes" });
     expect(c.VIBE_AUTH_MODE).toBe("local");
+    expect(c.modeFromEnv).toBe(false);
+    expect(loadEnvConfig({ VIBE_AUTH_MODE: "both" }).modeFromEnv).toBe(true);
     expect(c.VIBE_OIDC_ISSUER).toBe("https://auth.x/application/o/tb/");
     expect(c.VIBE_OIDC_REQUIRE_MFA_AMR).toBe(true);
     expect(c.VIBE_BREAKGLASS_USERNAME).toBe("vibe-breakglass");

@@ -176,7 +176,7 @@ export function AuthSettingsPage(p: AuthSettingsPageProps) {
         <div style={s.row}>
           {(data.modes as Mode[]).map((m) => (
             <label key={m} style={{ ...s.row, gap: ".3rem" }}>
-              <input type="radio" name="vibe-auth-mode" checked={data.mode === m} disabled={busy || (m !== "local" && !data.effective)} onChange={() => void setMode(m)} />
+              <input type="radio" name="vibe-auth-mode" checked={data.mode === m} disabled={busy || !!data.modeManaged || (m !== "local" && !data.effective)} onChange={() => void setMode(m)} />
               <code>{m}</code>
             </label>
           ))}
@@ -184,6 +184,11 @@ export function AuthSettingsPage(p: AuthSettingsPageProps) {
         <p className={cn("note")} style={st("note", "note")}>
           {modeDesc[data.mode]}
         </p>
+        {data.modeManaged && (
+          <p className={cn("note")} style={st("note", "note")}>
+            <span style={s.pill}>set by the appliance</span> The appliance sets the sign-in mode. To change it, run <code>sudo vibe identity mode &lt;product&gt; &lt;mode&gt;</code> on the appliance.
+          </p>
+        )}
         {!data.guards.canEnableOidcOnly && (
           <p className={cn("note")} style={st("note", "note")}>
             <strong>oidc_only</strong> requires the break-glass account {data.breakglass.exists ? "(present)" : "(missing — run npx vibe-auth breakglass ensure)"} and a successful connection test in this session

@@ -63,7 +63,10 @@ export const envSchema = z.object({
   VIBE_OIDC_LOOPBACK_PORTS: z.string().trim().default("49152-65535"),
 });
 
-export type EnvConfig = z.infer<typeof envSchema>;
+export type EnvConfig = z.infer<typeof envSchema> & {
+  /** D36: VIBE_AUTH_MODE was in the environment (not the default). */
+  modeFromEnv?: boolean;
+};
 
 export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const picked: Record<string, string | undefined> = {};
@@ -74,7 +77,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`vibe-auth: invalid environment configuration: ${issues}`);
   }
-  return parsed.data;
+  return { ...parsed.data, modeFromEnv: picked["VIBE_AUTH_MODE"] !== undefined };
 }
 
 /** Effective OIDC configuration after merging env + stored settings. */

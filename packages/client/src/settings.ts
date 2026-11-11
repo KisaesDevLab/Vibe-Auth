@@ -23,6 +23,16 @@ export function envManaged(env: EnvConfig): boolean {
   return !!env.VIBE_OIDC_CLIENT_ID;
 }
 
+/**
+ * D36: the sign-in mode is the environment's when it owns the connection (D35) and sets
+ * VIBE_AUTH_MODE: the Appliance's `vibe identity mode` decides, and a mode saved on the settings
+ * page is ignored (so the documented recovery `vibe identity mode <slug> local` always works).
+ * Without that, the page sets the mode as before.
+ */
+export function modeManaged(env: EnvConfig): boolean {
+  return envManaged(env) && !!env.modeFromEnv;
+}
+
 /** Stored connection values the environment overrides and that differ from it (for a boot warning). */
 export function ignoredStoredConnection(env: EnvConfig, stored: StoredAuthSettings | null): string[] {
   if (!envManaged(env) || !stored) return [];
@@ -32,6 +42,7 @@ export function ignoredStoredConnection(env: EnvConfig, stored: StoredAuthSettin
   if (stored.issuer && norm(stored.issuer) !== norm(env.VIBE_OIDC_ISSUER)) out.push("issuer");
   if (stored.internalBase && norm(stored.internalBase) !== norm(env.VIBE_OIDC_INTERNAL_BASE)) out.push("internalBase");
   if (stored.clientSecretWrapped) out.push("clientSecret");
+  if (modeManaged(env) && stored.mode && stored.mode !== env.VIBE_AUTH_MODE) out.push("mode");
   return out;
 }
 
@@ -48,7 +59,7 @@ export interface ResolveInput {
 
 export async function resolveEffectiveConfig(i: ResolveInput): Promise<EffectiveConfig> {
   const s = i.stored ?? {};
-  const mode = s.mode ?? i.env.VIBE_AUTH_MODE;
+  const mode = modeManaged(i.env) ? i.env.VIBE_AUTH_MODE : (s.mode ?? i.env.VIBE_AUTH_MODE);
   const managed = envManaged(i.env);
   const issuer = managed ? i.env.VIBE_OIDC_ISSUER : (s.issuer ?? i.env.VIBE_OIDC_ISSUER);
   const clientId = managed ? i.env.VIBE_OIDC_CLIENT_ID : (s.clientId ?? i.env.VIBE_OIDC_CLIENT_ID);
